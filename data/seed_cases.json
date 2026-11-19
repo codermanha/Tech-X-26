@@ -1,0 +1,125 @@
+{
+  "patients": [
+    {
+      "patient_id": "402",
+      "patient_name": "Elena Rostova",
+      "mrn": "MRN-7740211",
+      "dob": "1957-03-14",
+      "bed_id": "4B-12",
+      "unit": "Cardiac Telemetry 4B",
+      "primary_diagnosis": "NSTEMI with new-onset atrial fibrillation",
+      "icd10_codes": ["I21.4", "I48.91"],
+      "clinical_handoff_notes": "68F, post-NSTEMI day 4, s/p PCI to LAD. New paroxysmal AFib, CHA2DS2-VASc 5. Hemodynamically stable, cleared for discharge by Dr. Patel at 09:00. Needs outpatient apixaban 5 mg BID (starter pack) plus aspirin and atorvastatin. Anticoagulation is medically necessary: stroke risk is high and bleeding risk acceptable (HAS-BLED 2). Warfarin considered but not preferred due to variable INR access and drug interactions. Penicillin allergy (rash). eGFR 62, no hepatic impairment.",
+      "medications_list": ["Apixaban 5 mg BID", "Aspirin 81 mg daily", "Atorvastatin 80 mg nightly", "Metoprolol succinate 50 mg daily"],
+      "allergies": ["Penicillin (rash)"],
+      "labs": {"eGFR": 62, "Hgb": 12.8, "INR": 1.1, "ALT": 24},
+      "insurance_claim_code": "CLM-88213-A",
+      "payer_details": "Northstar Health PPO, Member ID NS-5530921, Tier-3 anticoagulant formulary",
+      "cleaning_protocol_tier": "Standard Sterilization",
+      "clearance_time": "09:00",
+      "milestones": {"Clinical_Clearance": "COMPLETED", "Pharmacy_Ready": "PENDING", "Insurance_Cleared": "PENDING", "Patient_Departed": "PENDING", "Housekeeping_Dispatched": "PENDING"},
+      "subsystems": {
+        "PHARMACY": {"status": "STOCKOUT", "code": "STOCKOUT_APIXABAN_5MG", "detail": "STOCKOUT: Apixaban 5 mg outpatient starter pack. Next delivery in 36h.", "latency_ms": 300},
+        "INSURANCE": {"status": "REJECTED", "code": "ERR_AUTH_409", "detail": "REJECTED: ERR_AUTH_409 - Prior authorization required for outpatient anticoagulant tier.", "latency_ms": 800}
+      }
+    },
+    {
+      "patient_id": "405",
+      "patient_name": "Marcus Vance",
+      "mrn": "MRN-7740305",
+      "dob": "1971-08-02",
+      "bed_id": "3A-04",
+      "unit": "Medical-Surgical 3A",
+      "primary_diagnosis": "Community-acquired pneumonia, resolved",
+      "icd10_codes": ["J18.9"],
+      "clinical_handoff_notes": "54M, CAP improved on IV then oral antibiotics. Afebrile 48h, SpO2 96% on room air. Cleared for discharge at 10:30. Completing amoxicillin-clavulanate at home. No allergies.",
+      "medications_list": ["Amoxicillin-clavulanate 875/125 mg BID x 3 days"],
+      "allergies": [],
+      "labs": {"WBC": 8.1, "CRP": 12},
+      "insurance_claim_code": "CLM-90417-B",
+      "payer_details": "Meridian Plus HMO, Member ID MP-1199042",
+      "cleaning_protocol_tier": "Standard Sterilization",
+      "clearance_time": "10:30",
+      "milestones": {"Clinical_Clearance": "COMPLETED", "Pharmacy_Ready": "PENDING", "Insurance_Cleared": "PENDING", "Patient_Departed": "PENDING", "Housekeeping_Dispatched": "PENDING"},
+      "subsystems": {
+        "PHARMACY": {"status": "CLEAR", "code": null, "detail": "CLEAR: Amoxicillin-clavulanate in stock, meds-to-beds ready.", "latency_ms": 300},
+        "INSURANCE": {"status": "CLEAR", "code": null, "detail": "CLEAR: Discharge authorized, no prior auth required.", "latency_ms": 600}
+      }
+    },
+    {
+      "patient_id": "408",
+      "patient_name": "Maria Chen",
+      "mrn": "MRN-7740408",
+      "dob": "1949-11-21",
+      "bed_id": "5C-08",
+      "unit": "Orthopedics 5C",
+      "primary_diagnosis": "Right total hip arthroplasty, post-op day 3",
+      "icd10_codes": ["Z96.641", "M16.11"],
+      "clinical_handoff_notes": "76F, uncomplicated R THA, PT cleared stairs. Cleared for discharge at 08:30. Non-ambulatory for distance: requires wheelchair transport to curb. Pharmacy and insurance already finalized.",
+      "medications_list": ["Enoxaparin 40 mg daily x 14 days", "Oxycodone 5 mg q6h PRN"],
+      "allergies": ["Sulfa"],
+      "labs": {"Hgb": 10.9},
+      "insurance_claim_code": "CLM-90633-C",
+      "payer_details": "Medicare Part A/B",
+      "cleaning_protocol_tier": "Standard Sterilization",
+      "clearance_time": "08:30",
+      "milestones": {"Clinical_Clearance": "COMPLETED", "Pharmacy_Ready": "COMPLETED", "Insurance_Cleared": "COMPLETED", "Patient_Departed": "PENDING", "Housekeeping_Dispatched": "PENDING"},
+      "subsystems": {
+        "PHARMACY": {"status": "CLEAR", "code": null, "detail": "CLEAR: Meds dispensed.", "latency_ms": 300},
+        "INSURANCE": {"status": "CLEAR", "code": null, "detail": "CLEAR: Authorized.", "latency_ms": 500}
+      }
+    },
+    {
+      "patient_id": "411",
+      "patient_name": "David Kim",
+      "mrn": "MRN-7740411",
+      "dob": "1983-05-09",
+      "bed_id": "4B-15",
+      "unit": "Cardiac Telemetry 4B",
+      "primary_diagnosis": "C. difficile colitis, improving",
+      "icd10_codes": ["A04.72"],
+      "clinical_handoff_notes": "42M, C. diff colitis, diarrhea resolved. Cleared 11:15 for oral vancomycin step-down. Pharmacy must confirm dosing and supply before discharge. Bed is wanted urgently for incoming ED telemetry surge. Contact-enteric precautions: use sporicidal cleaning.",
+      "medications_list": ["Vancomycin 125 mg PO QID x 10 days"],
+      "allergies": [],
+      "labs": {"WBC": 9.4, "Cr": 0.9},
+      "insurance_claim_code": "CLM-91002-D",
+      "payer_details": "Aetna Choice POS",
+      "cleaning_protocol_tier": "Enhanced Sporicidal (C. diff)",
+      "clearance_time": "11:15",
+      "milestones": {"Clinical_Clearance": "COMPLETED", "Pharmacy_Ready": "PENDING", "Insurance_Cleared": "PENDING", "Patient_Departed": "PENDING", "Housekeeping_Dispatched": "PENDING"},
+      "subsystems": {
+        "PHARMACY": {"status": "STOCKOUT", "code": "DOSE_CONFIRM_REQUIRED", "detail": "STOCKOUT: Oral vancomycin step-down dosing needs pharmacist confirmation.", "latency_ms": 300},
+        "INSURANCE": {"status": "CLEAR", "code": null, "detail": "CLEAR: Authorized.", "latency_ms": 600}
+      }
+    },
+    {
+      "patient_id": "415",
+      "patient_name": "Sofia Al-Mansoor",
+      "mrn": "MRN-7740415",
+      "dob": "1962-01-30",
+      "bed_id": "2D-01",
+      "unit": "General Medicine 2D",
+      "primary_diagnosis": "Type 2 diabetes with hyperglycemia, newly on insulin",
+      "icd10_codes": ["E11.65"],
+      "clinical_handoff_notes": "63F, new basal insulin start. Primary language Arabic (Spanish secondary). Needs translated discharge instructions and nurse sign-off on insulin teaching before departure.",
+      "medications_list": ["Insulin glargine 14 units nightly", "Metformin 1000 mg BID"],
+      "allergies": [],
+      "labs": {"A1c": 11.2, "eGFR": 78},
+      "insurance_claim_code": "CLM-91250-E",
+      "payer_details": "Gulf Care International",
+      "cleaning_protocol_tier": "Standard Sterilization",
+      "clearance_time": "12:00",
+      "milestones": {"Clinical_Clearance": "COMPLETED", "Pharmacy_Ready": "PENDING", "Insurance_Cleared": "PENDING", "Patient_Departed": "PENDING", "Housekeeping_Dispatched": "PENDING"},
+      "subsystems": {
+        "PHARMACY": {"status": "CLEAR", "code": null, "detail": "CLEAR: Insulin and pen needles available.", "latency_ms": 300},
+        "INSURANCE": {"status": "CLEAR", "code": null, "detail": "CLEAR: Authorized.", "latency_ms": 700}
+      }
+    }
+  ],
+  "ed_boarding_queue": [
+    {"boarder_id": "ED-01", "acuity": "HIGH", "needs_unit": "Cardiac Telemetry", "waiting_hours": 6.5},
+    {"boarder_id": "ED-02", "acuity": "HIGH", "needs_unit": "Cardiac Telemetry", "waiting_hours": 4.0},
+    {"boarder_id": "ED-03", "acuity": "MEDIUM", "needs_unit": "Medical-Surgical", "waiting_hours": 3.0},
+    {"boarder_id": "ED-04", "acuity": "LOW", "needs_unit": "General Medicine", "waiting_hours": 1.5}
+  ]
+}
