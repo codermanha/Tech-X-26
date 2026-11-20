@@ -45,7 +45,11 @@ def ensure_database_seeded() -> None:
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(escalations)").fetchall()
             }
-            if not count or "assigned_owner" not in cols:
+            chat_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+            }
+            if not count or "assigned_owner" not in cols or "recipient" not in chat_cols:
                 needs_reset = True
         except Exception:
             needs_reset = True

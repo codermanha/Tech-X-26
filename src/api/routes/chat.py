@@ -189,8 +189,14 @@ def send_patient_chat_message(
 
     sender_type = payload.sender_type.upper()
     recipient = (payload.recipient or "CARE_TEAM").upper()
+    restricted_session = is_restricted_role(role_val)
+    patient_label = (
+        "Patient (PHI Redacted)"
+        if restricted_session
+        else f"{state['patient'].get('patient_name', 'Patient')} (Patient)"
+    )
     default_names = {
-        "PATIENT": f"{state['patient'].get('patient_name', 'Patient')} (Patient)",
+        "PATIENT": patient_label,
         "PHYSICIAN": "Sarah Chen, MD (Physician)",
         "NURSE": "Elena Brooks, RN (Nurse)",
         "PHARMACIST": "Nathan Vance, PharmD (Pharmacist)",
@@ -262,8 +268,8 @@ def send_patient_chat_message(
                     pid, sender_type, recipient, clean_text, is_urgent, state
                 )
 
-            # Enforce RBAC output guard on AI response
-            guard = enforce_rbac_output_guard(ai_text, state["patient"], "NURSE")
+            # Enforce RBAC output guard on AI response for the active role
+            guard = enforce_rbac_output_guard(ai_text, state["patient"], role_val)
             safe_ai_text = guard["safe_reply"]
             ai_now = utc_now()
             bot_label = (
