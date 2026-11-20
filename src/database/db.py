@@ -1,8 +1,10 @@
 """SQLite (WAL) connection manager, schema, and append-only audit logging."""
 import logging
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from src import config
@@ -98,17 +100,31 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-def get_db_connection() -> sqlite3.Connection:
-    """New thread-safe WAL connection. Autocommit mode; callers use explicit BEGIN IMMEDIATE."""
-    path = config.get_db_path()
+def _open_sqlite_connection(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=15, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except sqlite3.OperationalError:
+        # Some serverless filesystems do not allow WAL shared-memory (-shm) files.
+        pass
     conn.execute("PRAGMA busy_timeout=5000;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
+
+def get_db_connection() -> sqlite3.Connection:
+    """New thread-safe WAL connection. Autocommit mode; callers use explicit BEGIN IMMEDIATE."""
+    path = config.get_db_path()
+    try:
+        return _open_sqlite_connection(path)
+    except (OSError, sqlite3.OperationalError):
+        fallback = Path(tempfile.gettempdir()) / path.name
+        if fallback == path:
+            raise
+        return _open_sqlite_connection(fallback)
 
 
 @contextmanager

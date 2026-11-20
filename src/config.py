@@ -1,5 +1,6 @@
 """Central settings, role definitions and the exact DAG topology (including Round 2 conditional nodes)."""
 import os
+import tempfile
 from pathlib import Path
 
 try:
@@ -13,15 +14,50 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 SEED_PATH = ROOT_DIR / "data" / "seed_cases.json"
 
 
+def _is_serverless_env() -> bool:
+    return any(
+        os.environ.get(var)
+        for var in ("VERCEL", "VERCEL_ENV", "VERCEL_URL", "AWS_LAMBDA_FUNCTION_NAME")
+    )
+
+
+def _is_writable_dir(directory: Path) -> bool:
+    """Return True if `directory` (or its nearest existing ancestor) is writable."""
+    probe = directory
+    while not probe.exists():
+        if probe.parent == probe:
+            return False
+        probe = probe.parent
+    return os.access(probe, os.W_OK)
+
+
+def _is_under_root(path: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(ROOT_DIR.resolve())
+    except OSError:
+        return False
+
+
 def get_db_path() -> Path:
     """Resolved at call time so tests can point DB_PATH at a temp file.
-    On Vercel serverless (read-only /var/task), default to /tmp."""
-    if os.environ.get("DB_PATH"):
-        p = Path(os.environ["DB_PATH"])
-        return p if p.is_absolute() else ROOT_DIR / p
-    if os.environ.get("VERCEL"):
-        return Path("/tmp/hospital_discharge_cases.sqlite")
-    return ROOT_DIR / "data" / "hospital_discharge_cases.sqlite"
+    On Vercel/serverless (read-only /var/task), always resolve to writable temp storage."""
+    temp_dir = Path(tempfile.gettempdir())
+    raw_db_path = os.environ.get("DB_PATH", "").strip()
+    if raw_db_path:
+        p = Path(raw_db_path)
+        candidate = p if p.is_absolute() else ROOT_DIR / p
+    elif _is_serverless_env():
+        candidate = temp_dir / "hospital_discharge_cases.sqlite"
+    else:
+        candidate = ROOT_DIR / "data" / "hospital_discharge_cases.sqlite"
+
+    if _is_serverless_env() and (_is_under_root(candidate) or not _is_writable_dir(candidate.parent)):
+        return temp_dir / candidate.name
+
+    if not _is_writable_dir(candidate.parent):
+        return temp_dir / candidate.name
+
+    return candidate
 
 
 def get_subsystem_timeout() -> float:
