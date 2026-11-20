@@ -1,12 +1,23 @@
-"""Patient list, RBAC-filtered DAG state, and immutable audit trail endpoints."""
+"""Patient list, RBAC-filtered DAG state, patient editing, and immutable audit trail endpoints."""
+import json
+
 from fastapi import APIRouter, HTTPException, Query
 
 from src.api.dependencies import ensure_database_seeded, is_restricted_role, validate_role
-from src.api.schemas import AuditLogResponse, PatientListResponse, PatientStateEnvelope
-from src.database.db import get_db_connection
+from src.api.schemas import (
+    AuditLogResponse,
+    PatientListResponse,
+    PatientStateEnvelope,
+    PatientUpdateRequest,
+    PatientUpdateResponse,
+)
+from src.database.db import get_db_connection, log_audit_event, transaction, utc_now
 from src.services.hospital_tools import get_discharge_dag_state
 
 router = APIRouter(prefix="/api/patients", tags=["Patients & DAG State"])
+
+NON_PHI_EDITABLE_FIELDS = {"bed_id", "unit", "cleaning_protocol_tier"}
+JSON_LIST_FIELDS = {"icd10_codes", "medications_list", "allergies"}
 
 
 @router.get(
@@ -154,4 +165,120 @@ def get_patient_audit_log(
         patient_id="REDACTED" if restricted else str(patient_id),
         restricted=restricted,
         entries=entries,
+    )
+
+
+@router.patch(
+    "/{patient_id}",
+    response_model=PatientUpdateResponse,
+    summary="Update patient chart or bed metadata with RBAC enforcement and audit logging",
+)
+def update_patient_record(
+    patient_id: str,
+    payload: PatientUpdateRequest,
+) -> PatientUpdateResponse:
+    """Persist edits to a patient record in SQLite, increment OCC version, and log an audit entry."""
+    ensure_database_seeded()
+    pid = str(patient_id)
+    role_val = validate_role(payload.actor_role)
+    restricted = is_restricted_role(role_val)
+
+    raw_updates = payload.model_dump(exclude={"actor_role"}, exclude_none=True)
+    if not raw_updates:
+        raise HTTPException(status_code=400, detail="No fields provided to update.")
+
+    if restricted:
+        disallowed = [k for k in raw_updates if k not in NON_PHI_EDITABLE_FIELDS]
+        if disallowed:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"RBAC Denied: {role_val} (Zero-PHI) cannot modify PHI fields "
+                    f"({', '.join(disallowed)})."
+                ),
+            )
+
+    if role_val == "PHARMACIST":
+        for billing_field in ("insurance_claim_code", "payer_details"):
+            if billing_field in raw_updates:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"RBAC Denied: PHARMACIST cannot modify billing field '{billing_field}'.",
+                )
+    elif role_val == "INSURANCE_SPECIALIST":
+        for med_field in ("medications_list", "allergies"):
+            if med_field in raw_updates:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"RBAC Denied: INSURANCE_SPECIALIST cannot modify clinical field '{med_field}'.",
+                )
+
+    set_clauses: list[str] = []
+    params: list = []
+    updated_fields: list[str] = []
+
+    for col, val in raw_updates.items():
+        if col in JSON_LIST_FIELDS:
+            cleaned = [str(item).strip() for item in val if str(item).strip()]
+            set_clauses.append(f"{col} = ?")
+            params.append(json.dumps(cleaned))
+        elif col == "lives_alone":
+            set_clauses.append("lives_alone = ?")
+            params.append(1 if val else 0)
+        else:
+            set_clauses.append(f"{col} = ?")
+            params.append(val.strip() if isinstance(val, str) else val)
+        updated_fields.append(col)
+
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT version, age, lives_alone FROM patients WHERE patient_id = ?", (pid,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Unknown patient '{pid}'")
+
+        prev_v = int(row["version"])
+        new_v = prev_v + 1
+        set_clauses.append("version = ?")
+        params.append(new_v)
+        params.append(pid)
+
+        conn.execute(
+            f"UPDATE patients SET {', '.join(set_clauses)} WHERE patient_id = ?",
+            tuple(params),
+        )
+
+        # If age / lives_alone now triggers the >75 & lives-alone Social Work policy, ensure node exists
+        new_age = raw_updates.get("age", row["age"])
+        new_lives_alone = (
+            (1 if raw_updates["lives_alone"] else 0)
+            if "lives_alone" in raw_updates
+            else int(row["lives_alone"] or 0)
+        )
+        if new_age is not None and int(new_age) > 75 and new_lives_alone == 1:
+            conn.execute(
+                """INSERT OR IGNORE INTO dag_milestones
+                   (patient_id, milestone_id, status, notes, updated_at, updated_by)
+                   VALUES (?, 'Social_Work_Clearance', 'PENDING',
+                           'Policy triggered: patient age > 75 and lives alone', ?, ?)""",
+                (pid, utc_now(), role_val),
+            )
+
+        log_audit_event(
+            patient_id=pid,
+            actor=role_val,
+            tool_called="update_patient_record",
+            outcome="APPLIED",
+            message=f"Updated patient fields: {', '.join(updated_fields)} (v{prev_v} -> v{new_v})",
+            expected_version=prev_v,
+            new_version=new_v,
+            conn=conn,
+        )
+
+    return PatientUpdateResponse(
+        success=True,
+        patient_id=pid,
+        updated_fields=updated_fields,
+        new_version=new_v,
+        message=f"Updated {len(updated_fields)} field(s) for patient #{pid} (v{new_v}).",
     )

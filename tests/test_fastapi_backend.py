@@ -150,3 +150,44 @@ def test_board_overview_stretch_and_error_handlers():
     )
     assert r_403.status_code == 403
     assert r_403.json()["error_code"] == "RBACViolationError"
+
+
+def test_patch_patient_record_and_rbac():
+    # Physician updates clinical + placement fields
+    r_ok = client.patch(
+        "/api/patients/402",
+        json={
+            "actor_role": "PHYSICIAN",
+            "patient_name": "Elena Rostova-Updated",
+            "bed_id": "4B-14",
+            "allergies": ["Penicillin (rash)", "Sulfa"],
+        },
+    )
+    assert r_ok.status_code == 200
+    body = r_ok.json()
+    assert body["success"] is True
+    assert set(body["updated_fields"]) == {"patient_name", "bed_id", "allergies"}
+
+    st = client.get("/api/patients/402/state?role=PHYSICIAN").json()["state"]
+    assert st["patient"]["patient_name"] == "Elena Rostova-Updated"
+    assert st["patient"]["bed_id"] == "4B-14"
+    assert "Sulfa" in st["patient"]["allergies"]
+
+    # Zero-PHI role blocked from editing PHI
+    r_denied = client.patch(
+        "/api/patients/402",
+        json={"actor_role": "TRANSPORT", "patient_name": "Unauthorized Edit"},
+    )
+    assert r_denied.status_code == 403
+
+    # Zero-PHI role allowed to update cleaning_protocol_tier
+    r_evs = client.patch(
+        "/api/patients/402",
+        json={
+            "actor_role": "HOUSEKEEPING",
+            "cleaning_protocol_tier": "Airborne / UV-C Terminal Clean",
+        },
+    )
+    assert r_evs.status_code == 200
+    assert r_evs.json()["updated_fields"] == ["cleaning_protocol_tier"]
+

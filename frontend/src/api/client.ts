@@ -228,6 +228,52 @@ export interface ChatThreadResponse {
   message?: string;
 }
 
+export interface BoardBedSummary {
+  patient_id: string;
+  patient_name: string;
+  bed_id: string;
+  unit: string;
+  primary_diagnosis: string;
+  clearance_time: string | null;
+  state_version: number;
+  progress_pct: number;
+  milestones: Record<string, string>;
+  active_blockers: Array<{ milestone_id: string; detail: string }>;
+  open_escalations_count: number;
+  cleaning_protocol_tier: string;
+}
+
+export interface BoardOverviewResponse {
+  total_beds: number;
+  beds: BoardBedSummary[];
+}
+
+export interface PatientUpdatePayload {
+  actor_role: RoleId;
+  patient_name?: string;
+  bed_id?: string;
+  unit?: string;
+  age?: number;
+  lives_alone?: boolean;
+  primary_diagnosis?: string;
+  icd10_codes?: string[];
+  clinical_handoff_notes?: string;
+  medications_list?: string[];
+  allergies?: string[];
+  insurance_claim_code?: string;
+  payer_details?: string;
+  cleaning_protocol_tier?: string;
+  clearance_time?: string;
+}
+
+export interface PatientUpdateResponse {
+  success: boolean;
+  patient_id: string;
+  updated_fields: string[];
+  new_version: number;
+  message: string;
+}
+
 export interface ShiftHandoffResult {
   metrics: {
     total_active_discharges: number;
@@ -284,6 +330,11 @@ export const api = {
     request<PatientStateResponse>(
       `/api/patients/${encodeURIComponent(patientId)}/state?role=${encodeURIComponent(role)}`
     ),
+  updatePatient: (patientId: string, payload: PatientUpdatePayload) =>
+    request<PatientUpdateResponse>(`/api/patients/${encodeURIComponent(patientId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   getAuditLog: (patientId: string, role: RoleId) =>
     request<{ patient_id: string; restricted: boolean; entries: AuditEntry[] }>(
       `/api/patients/${encodeURIComponent(patientId)}/audit?role=${encodeURIComponent(role)}`
@@ -410,6 +461,7 @@ export const api = {
     }>(`/api/patients/${encodeURIComponent(patientId)}/autopilot`, {
       method: 'POST',
     }),
+  getBoardOverview: () => request<BoardOverviewResponse>('/api/patients/board/overview'),
   orchestrateAllBeds: () =>
     request<{
       success: boolean;

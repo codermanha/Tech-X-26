@@ -79,6 +79,32 @@ class PatientStateEnvelope(BaseModel):
     dag_nodes: dict[str, DAGNodeMetadata]
 
 
+class PatientUpdateRequest(BaseModel):
+    actor_role: str = Field(default="PHYSICIAN", description="Role performing the patient record edit")
+    patient_name: Optional[str] = None
+    bed_id: Optional[str] = None
+    unit: Optional[str] = None
+    age: Optional[int] = Field(default=None, ge=0, le=130)
+    lives_alone: Optional[bool] = None
+    primary_diagnosis: Optional[str] = None
+    icd10_codes: Optional[list[str]] = None
+    clinical_handoff_notes: Optional[str] = None
+    medications_list: Optional[list[str]] = None
+    allergies: Optional[list[str]] = None
+    insurance_claim_code: Optional[str] = None
+    payer_details: Optional[str] = None
+    cleaning_protocol_tier: Optional[str] = None
+    clearance_time: Optional[str] = None
+
+
+class PatientUpdateResponse(BaseModel):
+    success: bool
+    patient_id: str
+    updated_fields: list[str]
+    new_version: int
+    message: str
+
+
 class AuditLogItemModel(BaseModel):
     id: int
     timestamp: str

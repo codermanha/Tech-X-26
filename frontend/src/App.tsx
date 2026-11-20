@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { AllPatientsBoard } from './components/AllPatientsBoard';
 import { ChatWidget } from './components/ChatWidget';
+import { EditPatientModal } from './components/EditPatientModal';
 import { EmergencyChatPanel } from './components/EmergencyChatPanel';
 import { EmergencyChatWidget } from './components/EmergencyChatWidget';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -27,6 +29,7 @@ import {
   Lock,
   MessageSquare,
   MoreHorizontal,
+  Pencil,
   Pill,
   Play,
   RefreshCw,
@@ -42,6 +45,7 @@ import {
 import {
   api,
   type AuditEntry,
+  type BoardBedSummary,
   type ChatMessageItem,
   type CollisionTestResult,
   type DAGNodeInfo,
@@ -59,7 +63,7 @@ import {
   type SystemConfig,
 } from './api/client';
 
-type TabId = 'dag' | 'chat' | 'curveballs' | 'surge' | 'multi' | 'roi';
+type TabId = 'dag' | 'patients' | 'chat' | 'curveballs' | 'surge' | 'multi' | 'roi';
 
 const TEAM_PROFILES: Record<
   RoleId,
@@ -197,6 +201,7 @@ export function App() {
   const [config, setConfig] = useState<SystemConfig | null>(null);
   const [role, setRole] = useState<RoleId>('PHYSICIAN');
   const [patients, setPatients] = useState<PatientListItem[]>([]);
+  const [boardBeds, setBoardBeds] = useState<BoardBedSummary[]>([]);
   const [patientId, setPatientId] = useState<string>('402');
   const [activeTab, setActiveTab] = useState<TabId>('dag');
 
@@ -206,7 +211,8 @@ export function App() {
   const [resolutionNotes, setResolutionNotes] = useState<Record<number, string>>({});
 
   // Interactive test / orchestration state
-  const [simTimeout, setSimTimeout] = useState(false);
+  const [timeoutDept, setTimeoutDept] = useState<'' | 'INSURANCE' | 'PHARMACY'>('');
+  const [orchestrating, setOrchestrating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [lastOrchestration, setLastOrchestration] = useState<OrchestrationResponse | null>(null);
   const [guardReceipt, setGuardReceipt] = useState<MilestoneReceipt | null>(null);
@@ -283,6 +289,7 @@ export function App() {
   const [showRideAudit, setShowRideAudit] = useState(false);
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [batchBanner, setBatchBanner] = useState<string | null>(null);
+  const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -372,20 +379,23 @@ export function App() {
     whatIf = simulateResolvedWhatIf
   ) => {
     try {
-      const [cfg, ptList, st, aud, esc, surge, instr, eta, ride, chatRes] = await Promise.all([
-        config ? Promise.resolve(config) : api.getConfig(),
-        api.listPatients(currentRole),
-        api.getPatientState(pid, currentRole),
-        api.getAuditLog(pid, currentRole),
-        api.getEscalations(pid, currentRole),
-        api.getSurgeOverview(),
-        api.getInstructions(pid, targetLang, currentRole),
-        api.getPredictiveEta(pid, whatIf).catch(() => null),
-        api.getRideSync(pid).catch(() => null),
-        api.getChatMessages(pid, currentRole).catch(() => null),
-      ]);
+      const [cfg, ptList, st, aud, esc, surge, instr, eta, ride, chatRes, boardRes] =
+        await Promise.all([
+          config ? Promise.resolve(config) : api.getConfig(),
+          api.listPatients(currentRole),
+          api.getPatientState(pid, currentRole),
+          api.getAuditLog(pid, currentRole),
+          api.getEscalations(pid, currentRole),
+          api.getSurgeOverview(),
+          api.getInstructions(pid, targetLang, currentRole),
+          api.getPredictiveEta(pid, whatIf).catch(() => null),
+          api.getRideSync(pid).catch(() => null),
+          api.getChatMessages(pid, currentRole).catch(() => null),
+          api.getBoardOverview().catch(() => null),
+        ]);
       if (!config) setConfig(cfg);
       setPatients(ptList.patients);
+      if (boardRes?.beds) setBoardBeds(boardRes.beds);
       setStateResp(st);
       setAuditEntries(aud.entries);
       setEscalations(esc.tickets);
@@ -475,13 +485,15 @@ export function App() {
 
   const handleRunOrchestrator = async () => {
     setBusy(true);
+    setOrchestrating(true);
     try {
-      const res = await api.orchestrate(patientId, simTimeout ? 'INSURANCE' : null);
+      const res = await api.orchestrate(patientId, timeoutDept || null);
       setLastOrchestration(res);
       await refreshPatientWorkspace(patientId, role);
     } catch (err: any) {
       setErrorMsg(err.message);
     } finally {
+      setOrchestrating(false);
       setBusy(false);
     }
   };
@@ -734,6 +746,12 @@ export function App() {
               <nav className="space-y-1.5">
                 {[
                   { id: 'dag', label: 'Dashboard', icon: LayoutGrid, badge: 0 },
+                  {
+                    id: 'patients',
+                    label: 'All Patients',
+                    icon: Users,
+                    badge: boardBeds.length || patients.length,
+                  },
                   { id: 'chat', label: 'Emergency Chat', icon: MessageSquare, badge: chatUrgentCount },
                   { id: 'curveballs', label: 'Round 2 Curveballs', icon: ShieldAlert, badge: 0 },
                   { id: 'surge', label: 'ED Surge Queue', icon: FolderKanban, badge: 0 },
@@ -759,7 +777,13 @@ export function App() {
                         <span>{item.label}</span>
                       </span>
                       {item.badge > 0 && (
-                        <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-extrabold text-white">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                            item.id === 'chat'
+                              ? 'bg-rose-600 text-white'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}
+                        >
                           {item.badge}
                         </span>
                       )}
@@ -1081,6 +1105,17 @@ export function App() {
                         <button
                           type="button"
                           onClick={() => {
+                            setActiveTab('patients');
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-3.5 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        >
+                          <Users className="h-3.5 w-3.5" />
+                          View All Patients Board
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
                             setActiveTab('surge');
                             setOpenMenu(null);
                           }}
@@ -1235,9 +1270,19 @@ export function App() {
                   <div className="lg:col-span-2 rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-6 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] space-y-5">
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div>
-                        <h2 className="text-base font-extrabold text-slate-900">
-                          Discharge Orchestration Overview
-                        </h2>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="text-base font-extrabold text-slate-900">
+                            Discharge Orchestration Overview
+                          </h2>
+                          <button
+                            type="button"
+                            onClick={() => setEditingPatientId(patientId)}
+                            className="inline-flex items-center gap-1 rounded-xl bg-white/85 hover:bg-white border border-white px-2.5 py-1 text-[11px] font-bold text-blue-700 shadow-2xs transition cursor-pointer"
+                          >
+                            <Pencil className="h-3 w-3" />
+                            Edit Patient
+                          </button>
+                        </div>
                         <p className="text-xs text-slate-500 mt-0.5">
                           {restricted
                             ? `Zero-PHI Mode · Bed ${st?.bed_id || '4B-12'} (${st?.unit || ''})`
@@ -1271,104 +1316,189 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* Dual Overlapping Blue & Purple Spline Wave Chart with Floating Pill Callout */}
-                    <div className="relative rounded-2xl bg-white/60 border border-white/80 p-4 pt-6">
-                      <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-xl bg-white px-3 py-1 text-xs font-extrabold text-slate-800 shadow-md border border-slate-100">
-                        {lastOrchestration?.elapsed_ms
-                          ? `${lastOrchestration.elapsed_ms} ms`
-                          : `v${st?.state_version || 1} OCC`}
-                      </div>
+                    {/* Live Reactive DAG Telemetry Spline Chart */}
+                    {(() => {
+                      const stageSpecs = [
+                        { x: 55, label: 'Clearance', mid: 'Clinical_Clearance' },
+                        { x: 180, label: 'Pharmacy', mid: 'Pharmacy_Ready' },
+                        { x: 305, label: 'Insurance', mid: 'Insurance_Cleared' },
+                        { x: 430, label: 'Departure', mid: 'Patient_Departed' },
+                        { x: 555, label: 'EVS Clean', mid: 'Housekeeping_Dispatched' },
+                      ].map((s) => {
+                        const info = dagNodes[s.mid];
+                        const status = info?.status || 'PENDING';
+                        const locked = Boolean(info?.locked_by_dag && status !== 'COMPLETED');
+                        const y =
+                          status === 'COMPLETED'
+                            ? 28
+                            : status === 'BLOCKED_EXCEPTION'
+                            ? 106
+                            : status === 'STALE_REVIEW'
+                            ? 92
+                            : locked
+                            ? 122
+                            : 72;
+                        const fill =
+                          status === 'COMPLETED'
+                            ? '#2563eb'
+                            : status === 'BLOCKED_EXCEPTION'
+                            ? '#e11d48'
+                            : status === 'STALE_REVIEW'
+                            ? '#9333ea'
+                            : locked
+                            ? '#94a3b8'
+                            : '#f59e0b';
+                        return { ...s, status, locked, y, fill };
+                      });
 
-                      <svg viewBox="0 0 600 155" className="w-full h-36 overflow-visible">
-                        <defs>
-                          <linearGradient id="astraBlueArea" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.24" />
-                            <stop offset="100%" stopColor="#2563eb" stopOpacity="0.0" />
-                          </linearGradient>
-                          <linearGradient id="astraPurpleArea" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.20" />
-                            <stop offset="100%" stopColor="#7c3aed" stopOpacity="0.0" />
-                          </linearGradient>
-                        </defs>
+                      const buildSmoothPath = (pts: Array<{ x: number; y: number }>) => {
+                        if (pts.length === 0) return '';
+                        let d = `M ${pts[0].x} ${pts[0].y}`;
+                        for (let i = 0; i < pts.length - 1; i++) {
+                          const p0 = pts[i];
+                          const p1 = pts[i + 1];
+                          const cx = (p0.x + p1.x) / 2;
+                          d += ` C ${cx} ${p0.y}, ${cx} ${p1.y}, ${p1.x} ${p1.y}`;
+                        }
+                        return d;
+                      };
 
-                        {[25, 60, 95, 130].map((y, idx) => (
-                          <g key={y}>
-                            <line
-                              x1="35"
-                              y1={y}
-                              x2="585"
-                              y2={y}
-                              stroke="#cbd5e1"
-                              strokeDasharray="3 3"
-                              strokeWidth="1"
+                      const liveLinePath = buildSmoothPath(stageSpecs);
+                      const liveAreaPath = `${liveLinePath} L ${
+                        stageSpecs[stageSpecs.length - 1].x
+                      } 135 L ${stageSpecs[0].x} 135 Z`;
+
+                      const activeOrch =
+                        lastOrchestration && lastOrchestration.patient_id === patientId
+                          ? lastOrchestration
+                          : null;
+
+                      return (
+                        <div className="relative rounded-2xl bg-white/60 border border-white/80 p-4 pt-6">
+                          <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-xl bg-white px-3 py-1 text-xs font-extrabold text-slate-800 shadow-md border border-slate-100 flex items-center gap-1.5">
+                            {orchestrating ? (
+                              <>
+                                <RefreshCw className="h-3 w-3 animate-spin text-blue-600" />
+                                <span>Running Parallel Checks...</span>
+                              </>
+                            ) : activeOrch?.elapsed_ms ? (
+                              <span>
+                                {activeOrch.elapsed_ms} ms ·{' '}
+                                {activeOrch.tickets.length > 0
+                                  ? `${activeOrch.tickets.length} Ticket${
+                                      activeOrch.tickets.length > 1 ? 's' : ''
+                                    }`
+                                  : activeOrch.halted
+                                  ? 'Halted'
+                                  : 'Cleared'}
+                              </span>
+                            ) : (
+                              <span>
+                                v{st?.state_version || 1} OCC · {progressPct}% Complete
+                              </span>
+                            )}
+                          </div>
+
+                          <svg viewBox="0 0 600 158" className="w-full h-36 overflow-visible">
+                            <defs>
+                              <linearGradient id="astraBlueArea" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#2563eb" stopOpacity="0.24" />
+                                <stop offset="100%" stopColor="#2563eb" stopOpacity="0.0" />
+                              </linearGradient>
+                              <linearGradient id="astraPurpleArea" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.14" />
+                                <stop offset="100%" stopColor="#7c3aed" stopOpacity="0.0" />
+                              </linearGradient>
+                            </defs>
+
+                            {[
+                              { y: 28, label: 'Done' },
+                              { y: 72, label: 'Ready' },
+                              { y: 106, label: 'Hold' },
+                              { y: 130, label: 'Wait' },
+                            ].map((row) => (
+                              <g key={row.y}>
+                                <line
+                                  x1="38"
+                                  y1={row.y}
+                                  x2="585"
+                                  y2={row.y}
+                                  stroke="#cbd5e1"
+                                  strokeDasharray="3 3"
+                                  strokeWidth="1"
+                                />
+                                <text x="2" y={row.y + 3} className="fill-slate-400 text-[9px]">
+                                  {row.label}
+                                </text>
+                              </g>
+                            ))}
+
+                            {/* Target Ideal Flow Baseline (subtle purple wave) */}
+                            <path
+                              d="M 55 36 C 140 36, 220 42, 305 42 C 390 42, 470 36, 555 32 L 555 135 L 55 135 Z"
+                              fill="url(#astraPurpleArea)"
                             />
-                            <text x="5" y={y + 4} className="fill-slate-400 text-[10px]">
-                              {(4 - idx) * 100}
-                            </text>
-                          </g>
-                        ))}
+                            <path
+                              d="M 55 36 C 140 36, 220 42, 305 42 C 390 42, 470 36, 555 32"
+                              fill="none"
+                              stroke="#7c3aed"
+                              strokeDasharray="4 4"
+                              strokeWidth="1.75"
+                              strokeLinecap="round"
+                              opacity="0.55"
+                            />
 
-                        <path
-                          d="M 40 130 C 90 100, 130 115, 180 75 C 230 35, 265 110, 315 80 C 365 50, 420 95, 480 70 C 520 55, 555 45, 585 35 L 585 135 L 40 135 Z"
-                          fill="url(#astraPurpleArea)"
-                        />
-                        <path
-                          d="M 40 130 C 90 100, 130 115, 180 75 C 230 35, 265 110, 315 80 C 365 50, 420 95, 480 70 C 520 55, 555 45, 585 35"
-                          fill="none"
-                          stroke="#7c3aed"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                        />
+                            {/* Live DAG Progress Curve */}
+                            <path d={liveAreaPath} fill="url(#astraBlueArea)" />
+                            <path
+                              d={liveLinePath}
+                              fill="none"
+                              stroke="#2563eb"
+                              strokeWidth="2.75"
+                              strokeLinecap="round"
+                            />
 
-                        <path
-                          d="M 40 125 C 85 65, 135 110, 190 95 C 245 80, 265 30, 315 45 C 365 60, 415 35, 475 45 C 525 50, 555 25, 585 15 L 585 135 L 40 135 Z"
-                          fill="url(#astraBlueArea)"
-                        />
-                        <path
-                          d="M 40 125 C 85 65, 135 110, 190 95 C 245 80, 265 30, 315 45 C 365 60, 415 35, 475 45 C 525 50, 555 25, 585 15"
-                          fill="none"
-                          stroke="#2563eb"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                        />
-
-                        <circle
-                          cx="315"
-                          cy="45"
-                          r="4.5"
-                          fill="#2563eb"
-                          stroke="#fff"
-                          strokeWidth="2"
-                        />
-                        <circle
-                          cx="315"
-                          cy="80"
-                          r="4.5"
-                          fill="#7c3aed"
-                          stroke="#fff"
-                          strokeWidth="2"
-                        />
-
-                        {[
-                          { x: 45, label: 'Clearance', mid: 'Clinical_Clearance' },
-                          { x: 165, label: 'Pharmacy', mid: 'Pharmacy_Ready' },
-                          { x: 295, label: 'Insurance', mid: 'Insurance_Cleared' },
-                          { x: 425, label: 'Departure', mid: 'Patient_Departed' },
-                          { x: 535, label: 'EVS Clean', mid: 'Housekeeping_Dispatched' },
-                        ].map((pt) => (
-                          <text
-                            key={pt.label}
-                            x={pt.x}
-                            y="150"
-                            onClick={() => handleInspectNode(pt.mid)}
-                            className="fill-slate-500 hover:fill-blue-600 text-[10px] font-semibold cursor-pointer"
-                          >
-                            <title>Click to inspect {pt.mid.replace(/_/g, ' ')}</title>
-                            {pt.label}
-                          </text>
-                        ))}
-                      </svg>
-                    </div>
+                            {/* Interactive Stage Nodes & Labels */}
+                            {stageSpecs.map((pt) => (
+                              <g
+                                key={pt.mid}
+                                onClick={() => handleInspectNode(pt.mid)}
+                                className="cursor-pointer group"
+                              >
+                                <title>
+                                  {pt.mid.replace(/_/g, ' ')}: {pt.status} (click to inspect)
+                                </title>
+                                {pt.status === 'BLOCKED_EXCEPTION' && (
+                                  <circle
+                                    cx={pt.x}
+                                    cy={pt.y}
+                                    r="9"
+                                    fill="#e11d48"
+                                    opacity="0.18"
+                                  />
+                                )}
+                                <circle
+                                  cx={pt.x}
+                                  cy={pt.y}
+                                  r="5.5"
+                                  fill={pt.fill}
+                                  stroke="#ffffff"
+                                  strokeWidth="2.2"
+                                />
+                                <text
+                                  x={pt.x}
+                                  y="152"
+                                  textAnchor="middle"
+                                  className="fill-slate-600 group-hover:fill-blue-600 text-[10px] font-semibold"
+                                >
+                                  {pt.label}
+                                </text>
+                              </g>
+                            ))}
+                          </svg>
+                        </div>
+                      );
+                    })()}
 
                     {/* Role-Scoped Clinical Snapshot Pills */}
                     {!restricted && (
@@ -1456,18 +1586,37 @@ export function App() {
                           disabled={busy}
                           className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-4 py-2.5 text-xs font-extrabold text-white shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
                         >
-                          <Play className="h-3.5 w-3.5 fill-current" />
-                          Run Autonomous Orchestrator
+                          {orchestrating ? (
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Play className="h-3.5 w-3.5 fill-current" />
+                          )}
+                          {orchestrating
+                            ? 'Running Parallel Checks...'
+                            : 'Run Autonomous Orchestrator'}
                         </button>
-                        <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer px-2">
-                          <input
-                            type="checkbox"
-                            checked={simTimeout}
-                            onChange={(e) => setSimTimeout(e.target.checked)}
-                            className="rounded accent-blue-600"
-                          />
-                          <span>3.5s Timeout Test</span>
-                        </label>
+                        <button
+                          type="button"
+                          onClick={handleOrchestrateAllBeds}
+                          disabled={busy}
+                          title="Run autonomous orchestration across all active beds"
+                          className="inline-flex items-center gap-1.5 rounded-2xl bg-white/85 hover:bg-white border border-white px-3 py-2 text-xs font-bold text-blue-700 shadow-xs transition cursor-pointer disabled:opacity-50"
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                          All Beds
+                        </button>
+                        <select
+                          aria-label="Simulate department timeout"
+                          value={timeoutDept}
+                          onChange={(e) =>
+                            setTimeoutDept(e.target.value as '' | 'INSURANCE' | 'PHARMACY')
+                          }
+                          className="rounded-xl bg-white/85 border border-white px-2.5 py-2 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-blue-400 cursor-pointer"
+                        >
+                          <option value="">Normal Parallel Run</option>
+                          <option value="INSURANCE">Timeout Test: Insurance (3.5s)</option>
+                          <option value="PHARMACY">Timeout Test: Pharmacy (3.5s)</option>
+                        </select>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
@@ -1500,13 +1649,135 @@ export function App() {
 
                     {/* Guard / Collision / Injection / Orchestration Receipts */}
                     {lastOrchestration && lastOrchestration.patient_id === patientId && (
-                      <div className="rounded-2xl bg-blue-50/90 border border-blue-200 p-3.5 text-xs text-slate-800 space-y-1">
-                        <div className="font-extrabold text-blue-800">
-                          🤖 Orchestrator Trace ({lastOrchestration.elapsed_ms || 0} ms):
+                      <div className="rounded-2xl bg-blue-50/90 border border-blue-200 p-4 text-xs text-slate-800 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="font-extrabold text-blue-900 flex items-center gap-2">
+                            <span>
+                              🤖 Autonomous Orchestrator ({lastOrchestration.elapsed_ms || 0} ms)
+                            </span>
+                            {lastOrchestration.final_version && (
+                              <span className="rounded-full bg-white px-2 py-0.5 font-mono text-[10px] text-blue-700 border border-blue-200">
+                                v{lastOrchestration.final_version}
+                              </span>
+                            )}
+                            {lastOrchestration.halted && (
+                              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-extrabold text-rose-700">
+                                HALTED
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setLastOrchestration(null)}
+                            className="text-[11px] font-bold text-slate-400 hover:text-slate-700 cursor-pointer"
+                          >
+                            Dismiss ✕
+                          </button>
                         </div>
-                        {lastOrchestration.trace.map((line, i) => (
-                          <div key={i}>• {line}</div>
-                        ))}
+
+                        {/* Parallel Branch Results Breakdown */}
+                        {lastOrchestration.checks && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            {(
+                              [
+                                {
+                                  key: 'pharmacy',
+                                  title: 'Pharmacy Parallel Check',
+                                  milestone: 'Pharmacy_Ready',
+                                  data: lastOrchestration.checks.pharmacy,
+                                },
+                                {
+                                  key: 'insurance',
+                                  title: 'Insurance Parallel Check',
+                                  milestone: 'Insurance_Cleared',
+                                  data: lastOrchestration.checks.insurance,
+                                },
+                              ] as const
+                            ).map((branch) => {
+                              const isClear = branch.data.status === 'CLEAR';
+                              const isTimeout = branch.data.status === 'TIMEOUT';
+                              return (
+                                <div
+                                  key={branch.key}
+                                  onClick={() => handleInspectNode(branch.milestone)}
+                                  className="rounded-xl bg-white/95 border border-blue-100 hover:border-blue-300 p-3 space-y-1 cursor-pointer transition"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-extrabold text-slate-900">
+                                      {branch.title}
+                                    </span>
+                                    <span
+                                      className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                                        isClear
+                                          ? 'bg-emerald-100 text-emerald-800'
+                                          : isTimeout
+                                          ? 'bg-amber-100 text-amber-800'
+                                          : 'bg-rose-100 text-rose-700'
+                                      }`}
+                                    >
+                                      {branch.data.status} · {branch.data.latency_ms}ms
+                                    </span>
+                                  </div>
+                                  {branch.data.code && (
+                                    <div className="font-mono text-[10px] font-bold text-indigo-700">
+                                      {branch.data.code}
+                                    </div>
+                                  )}
+                                  <div className="text-[11px] text-slate-600 line-clamp-2">
+                                    {branch.data.detail}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Actionable Next Steps */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {lastOrchestration.halted && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleDownstreamAction('Clinical_Clearance')}
+                              className="rounded-xl bg-blue-600 hover:bg-blue-500 px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer disabled:opacity-50"
+                            >
+                              ✓ Sign Clinical Clearance & Unlock
+                            </button>
+                          )}
+                          {!restricted &&
+                            lastOrchestration.tickets.map((t) => (
+                              <button
+                                key={t.ticket_id}
+                                type="button"
+                                onClick={() => {
+                                  setRole(t.assigned_role as RoleId);
+                                  setFlashReceipt(null);
+                                }}
+                                className="rounded-xl bg-amber-100 hover:bg-amber-200 border border-amber-300 px-3 py-1.5 text-[11px] font-extrabold text-amber-950 cursor-pointer transition"
+                              >
+                                Resolve Ticket #{t.ticket_id} as {t.assigned_role} →
+                              </button>
+                            ))}
+                          {dagNodes.Pharmacy_Ready?.status === 'COMPLETED' &&
+                            dagNodes.Insurance_Cleared?.status === 'COMPLETED' &&
+                            dagNodes.Patient_Departed?.status !== 'COMPLETED' && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleDownstreamAction('Patient_Departed')}
+                                className="rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer disabled:opacity-50"
+                              >
+                                ✓ Upstream Cleared — Confirm Patient Departed
+                              </button>
+                            )}
+                        </div>
+
+                        {/* Execution Trace */}
+                        <div className="rounded-xl bg-white/75 border border-blue-100 p-2.5 space-y-0.5 text-[11px] text-slate-700">
+                          {lastOrchestration.trace.map((line, i) => (
+                            <div key={i}>• {line}</div>
+                          ))}
+                        </div>
                       </div>
                     )}
                     {guardReceipt && (
@@ -2151,6 +2422,48 @@ export function App() {
                   </div>
                 </div>
               </>
+            )}
+
+            {/* ======================================================== ALL PATIENTS BOARD TAB */}
+            {activeTab === 'patients' && (
+              <AllPatientsBoard
+                beds={boardBeds}
+                activePatientId={patientId}
+                restricted={restricted}
+                busy={busy}
+                onSelectPatient={(pid, targetTab) => {
+                  selectPatient(pid);
+                  setActiveTab(targetTab || 'dag');
+                }}
+                onEditPatient={(pid) => setEditingPatientId(pid)}
+                onOrchestratePatient={async (pid) => {
+                  setBusy(true);
+                  try {
+                    const res = await api.orchestrate(pid, null);
+                    setLastOrchestration(res);
+                    await refreshPatientWorkspace(patientId, role);
+                  } catch (err: any) {
+                    setErrorMsg(err.message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                onAutopilotPatient={async (pid) => {
+                  setBusy(true);
+                  try {
+                    const res = await api.runAutopilot(pid);
+                    setAutopilotSteps(res.steps);
+                    setLastOrchestration(res.orchestration);
+                    await refreshPatientWorkspace(patientId, role);
+                  } catch (err: any) {
+                    setErrorMsg(err.message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                onOrchestrateAll={handleOrchestrateAllBeds}
+                onRefresh={() => refreshPatientWorkspace(patientId, role)}
+              />
             )}
 
             {/* ======================================================== EMERGENCY CARE-TEAM CHAT TAB */}
@@ -3029,6 +3342,17 @@ export function App() {
           </main>
         </div>
       </div>
+
+      <EditPatientModal
+        patientId={editingPatientId}
+        role={role}
+        restricted={restricted}
+        onClose={() => setEditingPatientId(null)}
+        onSaved={async (msg) => {
+          setBatchBanner(msg);
+          await refreshPatientWorkspace(patientId, role);
+        }}
+      />
 
       <div className="fixed bottom-5 right-5 z-50 flex items-end gap-2.5">
         <EmergencyChatWidget
