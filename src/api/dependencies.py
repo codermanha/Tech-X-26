@@ -1,10 +1,14 @@
 """Shared dependencies and helpers for the ClearTurn FastAPI backend."""
+import threading
+
 from fastapi import HTTPException
 
 from src.config import PHI_STRIPPED_ROLES
 from src.database.db import get_db_connection
 from src.database.seed import seed_database
 from src.models.schemas import UserRole
+
+_SEED_LOCK = threading.Lock()
 
 ROLE_LABELS = {
     "PHYSICIAN": "Physician / Command Center",
@@ -31,21 +35,25 @@ ROLE_BANNERS = {
 
 def ensure_database_seeded() -> None:
     """Ensure the SQLite WAL database exists, has the latest schema, and is populated."""
-    needs_reset = False
-    try:
-        conn = get_db_connection()
-        count = conn.execute("SELECT COUNT(*) AS c FROM patients").fetchone()["c"]
-        cols = {
-            r["name"]
-            for r in conn.execute("PRAGMA table_info(escalations)").fetchall()
-        }
-        conn.close()
-        if not count or "assigned_owner" not in cols:
+    with _SEED_LOCK:
+        needs_reset = False
+        conn = None
+        try:
+            conn = get_db_connection()
+            count = conn.execute("SELECT COUNT(*) AS c FROM patients").fetchone()["c"]
+            cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(escalations)").fetchall()
+            }
+            if not count or "assigned_owner" not in cols:
+                needs_reset = True
+        except Exception:
             needs_reset = True
-    except Exception:
-        needs_reset = True
-    if needs_reset:
-        seed_database(reset=True)
+        finally:
+            if conn is not None:
+                conn.close()
+        if needs_reset:
+            seed_database(reset=True)
 
 
 def validate_role(role: str) -> str:
