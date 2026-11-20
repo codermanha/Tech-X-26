@@ -10,11 +10,13 @@ Interactive OpenAPI / Swagger documentation is available at:
 """
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.dependencies import ensure_database_seeded
 from src.api.routes import advanced, milestones, orchestrator, patients, stretch, system
@@ -150,7 +152,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
-        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|.*\.(devtunnels\.ms|github\.dev))(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -165,6 +167,18 @@ def create_app() -> FastAPI:
     app.include_router(orchestrator.router)
     app.include_router(stretch.router)
     app.include_router(advanced.router)
+
+    dist_dir = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+    assets_dir = dist_dir / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def serve_frontend_root():
+        index_file = dist_dir / "index.html"
+        if index_file.is_file():
+            return FileResponse(str(index_file))
+        return {"service": "ClearTurn API", "docs": "/docs"}
 
     return app
 

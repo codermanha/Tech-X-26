@@ -230,15 +230,23 @@ export interface ShiftHandoffResult {
 }
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || '';
+const DIRECT_BACKEND = 'http://127.0.0.1:8000';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const init: RequestInit = {
     headers: { 'Content-Type': 'application/json' },
     ...options,
-  });
+  };
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, init);
+  } catch {
+    // Fallback directly to IPv4 FastAPI backend if Vite proxy is mid-reload
+    res = await fetch(`${DIRECT_BACKEND}${path}`, init);
+  }
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.detail || `API Error ${res.status}`);
+    throw new Error(errBody.detail || errBody.message || `API Error ${res.status}`);
   }
   return res.json();
 }

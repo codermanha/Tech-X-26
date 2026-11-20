@@ -5,8 +5,10 @@ import {
   Award,
   BarChart3,
   Bell,
+  Car,
   CheckCircle2,
   ClipboardCheck,
+  Clock,
   CreditCard,
   DollarSign,
   ExternalLink,
@@ -20,8 +22,10 @@ import {
   MoreHorizontal,
   Pill,
   Play,
+  RefreshCw,
   Search,
   Settings,
+  ShieldAlert,
   Sparkles,
   Stethoscope,
   Truck,
@@ -34,12 +38,17 @@ import {
   type AuditEntry,
   type CollisionTestResult,
   type DAGNodeInfo,
+  type DagNodeInspectorResult,
   type EscalationTicketRecord,
+  type FamilyRideSyncResult,
   type MilestoneReceipt,
   type OrchestrationResponse,
   type PatientListItem,
   type PatientStateResponse,
+  type PredictiveEtaResult,
+  type PromptInjectionResult,
   type RoleId,
+  type ShiftHandoffResult,
   type SystemConfig,
 } from './api/client';
 
@@ -86,6 +95,45 @@ const TEAM_PROFILES: Record<
     initials: 'EV',
   },
 };
+
+const DEFAULT_ROLES = [
+  {
+    id: 'PHYSICIAN' as RoleId,
+    label: 'Physician / Command Center',
+    banner: 'Full chart access. May run the autonomous orchestrator, nurse sign-off, and guard tests.',
+    phi_stripped: false,
+  },
+  {
+    id: 'PHARMACIST' as RoleId,
+    label: 'Pharmacist',
+    banner: 'Medication, allergy and lab data. Billing data hidden. Owns Pharmacy_Ready.',
+    phi_stripped: false,
+  },
+  {
+    id: 'INSURANCE_SPECIALIST' as RoleId,
+    label: 'Insurance Specialist',
+    banner: 'Billing, ICD-10 and clinical-necessity data. Medications hidden. Owns Insurance_Cleared.',
+    phi_stripped: false,
+  },
+  {
+    id: 'NURSE' as RoleId,
+    label: 'Nurse',
+    banner: 'Full chart access. May confirm patient departure, sign off discharge instructions, and dispatch housekeeping.',
+    phi_stripped: false,
+  },
+  {
+    id: 'TRANSPORT' as RoleId,
+    label: 'Transport',
+    banner: 'PHI STRIPPED. Bed, unit and turnover status only.',
+    phi_stripped: true,
+  },
+  {
+    id: 'HOUSEKEEPING' as RoleId,
+    label: 'Housekeeping (EVS)',
+    banner: 'PHI STRIPPED. Bed, unit, turnover status and cleaning protocol only.',
+    phi_stripped: true,
+  },
+];
 
 const NODE_META: Record<string, { title: string; dept: string; icon: any; barColor: string }> = {
   Clinical_Clearance: {
@@ -138,11 +186,21 @@ export function App() {
   const [lastOrchestration, setLastOrchestration] = useState<OrchestrationResponse | null>(null);
   const [guardReceipt, setGuardReceipt] = useState<MilestoneReceipt | null>(null);
   const [collisionResult, setCollisionResult] = useState<CollisionTestResult | null>(null);
+  const [promptInjectionResult, setPromptInjectionResult] = useState<PromptInjectionResult | null>(
+    null
+  );
   const [flashReceipt, setFlashReceipt] = useState<MilestoneReceipt | null>(null);
   const [showRbacJson, setShowRbacJson] = useState(false);
   const [autopilotSteps, setAutopilotSteps] = useState<
     Array<{ step: string; role: string; detail: string }>
   >([]);
+
+  // Advanced features: Predictive ETA, Family Ride-Sync, DAG Node Inspector, Morning Shift Handoff
+  const [simulateResolvedWhatIf, setSimulateResolvedWhatIf] = useState(false);
+  const [etaData, setEtaData] = useState<PredictiveEtaResult | null>(null);
+  const [rideSyncData, setRideSyncData] = useState<FamilyRideSyncResult | null>(null);
+  const [inspectedNode, setInspectedNode] = useState<DagNodeInspectorResult | null>(null);
+  const [handoffBrief, setHandoffBrief] = useState<ShiftHandoffResult | null>(null);
 
   // Tab 2: ED Surge
   const [surgeData, setSurgeData] = useState<{
@@ -172,27 +230,40 @@ export function App() {
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    api
-      .getConfig()
-      .then(setConfig)
-      .catch((err) => setErrorMsg(err.message));
-  }, []);
-
-  useEffect(() => {
-    api
-      .listPatients(role)
-      .then((res) => {
-        setPatients(res.patients);
-        if (res.patients.length > 0 && !res.patients.some((p) => p.patient_id === patientId)) {
-          const defaultPid = res.patients.some((p) => p.patient_id === '402')
-            ? '402'
-            : res.patients[0].patient_id;
-          setPatientId(defaultPid);
-        }
-      })
-      .catch((err) => setErrorMsg(err.message));
-  }, [role]);
+  const refreshPatientWorkspace = async (
+    pid = patientId,
+    currentRole = role,
+    whatIf = simulateResolvedWhatIf
+  ) => {
+    try {
+      const [cfg, ptList, st, aud, esc, surge, instr, eta, ride] = await Promise.all([
+        config ? Promise.resolve(config) : api.getConfig(),
+        api.listPatients(currentRole),
+        api.getPatientState(pid, currentRole),
+        api.getAuditLog(pid, currentRole),
+        api.getEscalations(pid, currentRole),
+        api.getSurgeOverview(),
+        api.getInstructions(pid, targetLang, currentRole),
+        api.getPredictiveEta(pid, whatIf).catch(() => null),
+        api.getRideSync(pid).catch(() => null),
+      ]);
+      if (!config) setConfig(cfg);
+      setPatients(ptList.patients);
+      setStateResp(st);
+      setAuditEntries(aud.entries);
+      setEscalations(esc.tickets);
+      setSurgeData(surge);
+      setInstructionData(instr);
+      if (eta) setEtaData(eta);
+      if (ride) setRideSyncData(ride);
+      if (instr.record?.instructions_text) {
+        setEditableInstructions(instr.record.instructions_text);
+      }
+      setErrorMsg(null);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Connecting to FastAPI backend on port 8000...');
+    }
+  };
 
   useEffect(() => {
     if (patientId === '415') {
@@ -202,34 +273,19 @@ export function App() {
     }
   }, [patientId]);
 
-  const refreshPatientWorkspace = async (pid = patientId, currentRole = role) => {
-    try {
-      setErrorMsg(null);
-      const [st, aud, esc, surge, instr] = await Promise.all([
-        api.getPatientState(pid, currentRole),
-        api.getAuditLog(pid, currentRole),
-        api.getEscalations(pid, currentRole),
-        api.getSurgeOverview(),
-        api.getInstructions(pid, targetLang, currentRole),
-      ]);
-      setStateResp(st);
-      setAuditEntries(aud.entries);
-      setEscalations(esc.tickets);
-      setSurgeData(surge);
-      setInstructionData(instr);
-      if (instr.record?.instructions_text) {
-        setEditableInstructions(instr.record.instructions_text);
-      }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to load backend data');
-    }
-  };
-
   useEffect(() => {
-    if (patientId) {
-      refreshPatientWorkspace(patientId, role);
+    refreshPatientWorkspace(patientId, role, simulateResolvedWhatIf);
+  }, [patientId, role, targetLang, simulateResolvedWhatIf]);
+
+  // Auto-reconnect timer if backend was restarting
+  useEffect(() => {
+    if (!stateResp || errorMsg) {
+      const timer = setInterval(() => {
+        refreshPatientWorkspace(patientId, role, simulateResolvedWhatIf);
+      }, 2500);
+      return () => clearInterval(timer);
     }
-  }, [patientId, role, targetLang]);
+  }, [stateResp, errorMsg, patientId, role, simulateResolvedWhatIf]);
 
   useEffect(() => {
     api
@@ -249,9 +305,13 @@ export function App() {
       setLastOrchestration(null);
       setGuardReceipt(null);
       setCollisionResult(null);
+      setPromptInjectionResult(null);
       setFlashReceipt(null);
       setAutopilotSteps([]);
+      setInspectedNode(null);
       await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
@@ -290,6 +350,8 @@ export function App() {
       const receipt = await api.forcePrematureHousekeeping(patientId);
       setGuardReceipt(receipt);
       await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
@@ -301,13 +363,51 @@ export function App() {
       const res = await api.simulateCollision(patientId);
       setCollisionResult(res);
       await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSimulatePromptInjection = async () => {
+    setBusy(true);
+    try {
+      const res = await api.simulatePromptInjection(patientId);
+      setPromptInjectionResult(res);
+      await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleInspectNode = async (mid: string) => {
+    try {
+      const res = await api.inspectDagNode(patientId, mid, role);
+      setInspectedNode(res);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    }
+  };
+
+  const handleGenerateHandoff = async () => {
+    setBusy(true);
+    try {
+      const res = await api.generateShiftHandoff();
+      setHandoffBrief(res);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
   };
 
   const handleResolveEscalation = async (ticket: EscalationTicketRecord) => {
-    const notes = resolutionNotes[ticket.id] || '';
+    const notes =
+      resolutionNotes[ticket.id] ||
+      'Verified clinical parameters & approved specialist override.';
     setBusy(true);
     try {
       const receipt = await api.resolveEscalation(patientId, {
@@ -317,6 +417,8 @@ export function App() {
       });
       setFlashReceipt(receipt);
       await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
@@ -329,9 +431,12 @@ export function App() {
         milestone_id: milestoneId,
         new_status: 'COMPLETED',
         actor_role: role,
+        resolution_notes: `Completed ${milestoneId} by ${role}`,
       });
       setFlashReceipt(receipt);
       await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
@@ -345,6 +450,8 @@ export function App() {
         setEditableInstructions(res.record.instructions_text);
       }
       await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
@@ -370,16 +477,52 @@ export function App() {
         });
       }
       await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
   };
 
-  const activeRoleMeta = config?.roles.find((r) => r.id === role);
+  const rolesList = config?.roles || DEFAULT_ROLES;
+  const activeRoleMeta = rolesList.find((r) => r.id === role) || DEFAULT_ROLES[0];
   const restricted = Boolean(activeRoleMeta?.phi_stripped);
   const st = stateResp?.state;
-  const dagNodes = stateResp?.dag_nodes || {};
-  const patientObj = st?.patient || {};
+  const dagNodes: Record<string, DAGNodeInfo> = stateResp?.dag_nodes || {
+    Clinical_Clearance: { status: 'COMPLETED', locked_by_dag: false, depends_on: [] },
+    Pharmacy_Ready: { status: 'PENDING', locked_by_dag: false, depends_on: ['Clinical_Clearance'] },
+    Insurance_Cleared: {
+      status: 'PENDING',
+      locked_by_dag: false,
+      depends_on: ['Clinical_Clearance'],
+    },
+    Patient_Departed: {
+      status: 'PENDING',
+      locked_by_dag: true,
+      depends_on: ['Pharmacy_Ready', 'Insurance_Cleared'],
+    },
+    Housekeeping_Dispatched: {
+      status: 'PENDING',
+      locked_by_dag: true,
+      depends_on: ['Patient_Departed'],
+    },
+  };
+  const patientObj = st?.patient || {
+    patient_name: 'Elena Rostova',
+    bed_id: '4B-12',
+    unit: 'Cardiac Telemetry 4B',
+    primary_diagnosis: 'NSTEMI with new-onset atrial fibrillation',
+    icd10_codes: ['I21.4', 'I48.91'],
+    clinical_handoff_notes:
+      '68F, post-NSTEMI day 4, s/p PCI to LAD. New paroxysmal AFib, CHA2DS2-VASc 5. Cleared at 09:00.',
+    medications_list: ['Apixaban 5 mg BID', 'Aspirin 81 mg daily', 'Atorvastatin 80 mg nightly'],
+    allergies: ['Penicillin (rash)'],
+    labs: { eGFR: 62, Hgb: 12.8, INR: 1.1 },
+    insurance_claim_code: 'CLM-88213-A',
+    payer_details: 'Northstar Health PPO, Tier-3 anticoagulant formulary',
+    cleaning_protocol_tier: 'Standard Sterilization',
+    clearance_time: '09:00',
+  };
 
   const allMilestoneKeys = Object.keys(dagNodes);
   const completedCount = allMilestoneKeys.filter(
@@ -388,7 +531,7 @@ export function App() {
   const progressPct =
     allMilestoneKeys.length > 0
       ? Math.round((completedCount / allMilestoneKeys.length) * 100)
-      : 0;
+      : 20;
 
   const specialistMilestone =
     role === 'PHARMACIST'
@@ -404,7 +547,7 @@ export function App() {
   const profile = TEAM_PROFILES[role] || TEAM_PROFILES.PHYSICIAN;
   const activePatientItem = patients.find((p) => p.patient_id === patientId);
   const patientDisplayName = restricted
-    ? `Bed ${st?.bed_id || activePatientItem?.bed_id || '4B-12'} (${st?.unit || ''})`
+    ? `Bed ${st?.bed_id || activePatientItem?.bed_id || '4B-12'} (${st?.unit || 'Telemetry'})`
     : `${patientObj.patient_name || 'Elena Rostova'} · Bed ${patientObj.bed_id || '4B-12'}`;
 
   const priorityPillStyle = (info?: DAGNodeInfo) => {
@@ -430,8 +573,8 @@ export function App() {
         <div className="w-full min-h-[86vh] rounded-[34px] bg-gradient-to-br from-[#ebf1fc]/95 via-[#dce5f9]/95 to-[#c8d2f4]/95 backdrop-blur-2xl flex flex-col lg:flex-row overflow-hidden border border-white/70">
           {/* ======================================================== LEFT SIDEBAR (ASTRA ENTERPRISE STYLE) */}
           <aside className="w-full lg:w-64 shrink-0 border-b lg:border-b-0 lg:border-r border-white/60 bg-gradient-to-b from-white/40 via-white/20 to-[#9aaef0]/20 p-6 flex flex-col justify-between">
-            <div className="space-y-8">
-              {/* Brand Logo ("ASTRA ENTERPRISE" geometric A crest style) */}
+            <div className="space-y-7">
+              {/* Brand Logo ("ASTRA ENTERPRISE" geometric crest style) */}
               <div className="flex items-center gap-3 px-1">
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-500 to-purple-500 text-white shadow-md shadow-indigo-500/25">
                   <Activity className="h-5 w-5" />
@@ -475,11 +618,20 @@ export function App() {
                 })}
 
                 <button
+                  onClick={handleGenerateHandoff}
+                  disabled={busy}
+                  className="w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-sm font-medium text-slate-700 hover:bg-white/40 transition cursor-pointer"
+                >
+                  <ClipboardCheck className="h-4.5 w-4.5 text-slate-500" />
+                  <span>Shift Handoff Brief</span>
+                </button>
+
+                <button
                   onClick={() => setShowRbacJson(!showRbacJson)}
                   className="w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-sm font-medium text-slate-700 hover:bg-white/40 transition cursor-pointer"
                 >
                   <Users className="h-4.5 w-4.5 text-slate-500" />
-                  <span>RBAC Inspector</span>
+                  <span>{showRbacJson ? 'Hide RBAC JSON' : 'RBAC Inspector'}</span>
                 </button>
 
                 <button
@@ -492,10 +644,10 @@ export function App() {
                 </button>
               </nav>
 
-              {/* Quick Patient Switcher in Sidebar */}
-              <div className="rounded-2xl bg-white/55 border border-white/80 p-3.5 space-y-2 shadow-xs">
+              {/* Quick Patient Switcher & 1-Click Auto-Pilot in Sidebar */}
+              <div className="rounded-2xl bg-white/60 border border-white/80 p-3.5 space-y-2.5 shadow-xs">
                 <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
-                  Active Inpatient Case
+                  Select Inpatient Case
                 </div>
                 <select
                   value={patientId}
@@ -503,20 +655,32 @@ export function App() {
                     setPatientId(e.target.value);
                     setGuardReceipt(null);
                     setCollisionResult(null);
+                    setPromptInjectionResult(null);
                     setFlashReceipt(null);
+                    setInspectedNode(null);
                   }}
-                  className="w-full rounded-xl bg-white/90 border border-slate-200/80 px-2.5 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
+                  className="w-full rounded-xl bg-white/95 border border-slate-200/80 px-2.5 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
                 >
-                  {patients.map((p) => (
-                    <option key={p.patient_id} value={p.patient_id}>
-                      {p.label}
-                    </option>
-                  ))}
+                  {patients.length > 0 ? (
+                    patients.map((p) => (
+                      <option key={p.patient_id} value={p.patient_id}>
+                        {p.label}
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="402">#402 · Bed 4B-12 — Dual Blocker Case</option>
+                      <option value="405">#405 · Bed 3A-04</option>
+                      <option value="408">#408 · Bed 5C-08</option>
+                      <option value="411">#411 · Bed 4B-15</option>
+                      <option value="415">#415 · Bed 2D-01</option>
+                    </>
+                  )}
                 </select>
                 <button
                   onClick={handleRunAutopilot}
                   disabled={busy}
-                  className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-2 px-3 text-xs font-bold shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-2.5 px-3 text-xs font-extrabold shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
                 >
                   <Zap className="h-3.5 w-3.5 fill-current" />
                   1-Click Auto-Pilot
@@ -550,7 +714,7 @@ export function App() {
                 </div>
                 <div>
                   <div className="text-xs font-medium text-slate-500">Welcome,</div>
-                  <div className="text-xl font-extrabold text-slate-900 flex items-center gap-2.5">
+                  <div className="text-xl font-extrabold text-slate-900 flex flex-wrap items-center gap-2.5">
                     <span>{profile.name}</span>
                     <span
                       className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
@@ -565,9 +729,9 @@ export function App() {
                 </div>
               </div>
 
-              {/* Right Search / Case Bar + Notification Bell */}
-              <div className="flex items-center gap-2.5">
-                <div className="flex items-center gap-2 rounded-2xl bg-white/65 border border-white/80 px-3.5 py-2 shadow-xs min-w-[230px]">
+              {/* Right Search / Case Bar + Action Pills */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex items-center gap-2 rounded-2xl bg-white/65 border border-white/80 px-3.5 py-2 shadow-xs min-w-[220px]">
                   <Search className="h-4 w-4 text-slate-400 shrink-0" />
                   <span className="text-xs font-semibold text-slate-700 truncate">
                     {patientDisplayName}
@@ -578,10 +742,18 @@ export function App() {
                   onClick={handleRunAutopilot}
                   disabled={busy}
                   title="Run 1-Click Full Auto-Pilot"
-                  className="flex h-10 px-3.5 items-center gap-1.5 rounded-2xl bg-white/75 hover:bg-white border border-white text-xs font-extrabold text-blue-700 shadow-xs transition cursor-pointer"
+                  className="flex h-10 px-3.5 items-center gap-1.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-xs font-extrabold text-white shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
                 >
-                  <Zap className="h-4 w-4 text-blue-600 fill-current" />
-                  Auto-Pilot
+                  <Zap className="h-4 w-4 fill-current" />
+                  ⚡ Auto-Pilot (Do All)
+                </button>
+
+                <button
+                  onClick={() => refreshPatientWorkspace(patientId, role)}
+                  title="Refresh Data"
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/75 hover:bg-white border border-white text-slate-700 shadow-xs transition cursor-pointer"
+                >
+                  <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin text-blue-600' : ''}`} />
                 </button>
 
                 <button
@@ -600,15 +772,64 @@ export function App() {
             </div>
 
             {errorMsg && (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50/90 p-3.5 text-xs text-rose-700 flex items-center gap-2.5">
-                <AlertTriangle className="h-4 w-4 text-rose-500 shrink-0" />
-                <span>{errorMsg}</span>
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/90 p-3.5 text-xs text-amber-900 flex items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                  <span>{errorMsg}</span>
+                </div>
+                <button
+                  onClick={() => refreshPatientWorkspace(patientId, role)}
+                  className="rounded-xl bg-amber-600 text-white px-3 py-1 font-bold cursor-pointer"
+                >
+                  Retry Now
+                </button>
+              </div>
+            )}
+
+            {/* Global RBAC JSON Inspector Drawer (Visible on ANY tab when toggled) */}
+            {showRbacJson && (
+              <div className="rounded-3xl bg-slate-900 border border-slate-700 p-4 text-xs text-blue-200 space-y-2 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white">
+                    🔍 Live RBAC Payload for Role: {role} (PHI Redacted: {String(restricted)})
+                  </span>
+                  <button
+                    onClick={() => setShowRbacJson(false)}
+                    className="text-slate-400 hover:text-white font-bold cursor-pointer"
+                  >
+                    Close ✕
+                  </button>
+                </div>
+                <pre className="max-h-56 overflow-auto font-mono text-[11px]">
+                  {JSON.stringify(st || patientObj, null, 2)}
+                </pre>
+              </div>
+            )}
+
+            {/* Executive Morning Shift Handoff Brief Drawer */}
+            {handoffBrief && (
+              <div className="rounded-3xl bg-white/85 border border-white p-5 shadow-md space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-blue-700 flex items-center gap-2">
+                    <ClipboardCheck className="h-4 w-4" />
+                    Executive Morning Shift Handoff Brief (Drafted by {handoffBrief.drafted_by})
+                  </span>
+                  <button
+                    onClick={() => setHandoffBrief(null)}
+                    className="text-xs font-bold text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    Close ✕
+                  </button>
+                </div>
+                <pre className="whitespace-pre-wrap rounded-2xl bg-slate-50 border border-slate-200/70 p-4 text-xs text-slate-700 leading-relaxed">
+                  {handoffBrief.brief_text}
+                </pre>
               </div>
             )}
 
             {/* Auto-Pilot Completion Toast */}
             {autopilotSteps.length > 0 && (
-              <div className="rounded-3xl bg-white/80 border border-white p-4 shadow-sm space-y-2.5">
+              <div className="rounded-3xl bg-white/85 border border-white p-4 shadow-sm space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-extrabold text-blue-700 flex items-center gap-1.5">
                     <CheckCircle2 className="h-4 w-4 text-emerald-500" />
@@ -625,7 +846,7 @@ export function App() {
                   {autopilotSteps.map((s, idx) => (
                     <div
                       key={idx}
-                      className="rounded-2xl bg-white/90 border border-slate-100 p-2.5 text-xs"
+                      className="rounded-2xl bg-white/95 border border-slate-100 p-2.5 text-xs"
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-slate-800">
@@ -661,7 +882,6 @@ export function App() {
                       v{st?.state_version || 1} WAL
                     </span>
                   </div>
-                  {/* Mini vertical blue bar chart matching image */}
                   <div className="flex items-end gap-1.5 h-10">
                     {[35, 55, 40, 75, 50, 95, 65, 85].map((h, i) => (
                       <div
@@ -685,7 +905,6 @@ export function App() {
                     {completedCount} of {allMilestoneKeys.length} DAG Nodes
                   </div>
                 </div>
-                {/* Multi-color donut ring matching middle card in image */}
                 <div className="relative h-18 w-18 flex items-center justify-center">
                   <svg className="h-18 w-18 -rotate-90" viewBox="0 0 72 72">
                     <defs>
@@ -720,19 +939,19 @@ export function App() {
                 </div>
               </div>
 
-              {/* KPI Card 3: Team Performance / Parallel SLA Efficiency */}
+              {/* KPI Card 3: Predicted Bed-Ready ETA / Parallel Efficiency */}
               <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex flex-col justify-between">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-slate-800">Parallel Efficiency</span>
-                  <BarChart3 className="h-4 w-4 text-slate-400" />
+                  <span className="text-sm font-bold text-slate-800">Predicted Bed-Ready ETA</span>
+                  <Clock className="h-4 w-4 text-blue-600" />
                 </div>
                 <div className="mt-3 flex items-baseline justify-between">
                   <span className="text-3xl font-extrabold text-slate-900">
-                    {restricted ? '100%' : '91%'}
+                    {etaData?.active_projection?.predicted_bed_ready_eta || '15:25'}
                   </span>
-                  <span className="text-xs font-semibold text-slate-500">
-                    {restricted
-                      ? st?.cleaning_protocol_tier
+                  <span className="text-xs font-semibold text-blue-700">
+                    {etaData
+                      ? `${etaData.active_projection.total_remaining_minutes}m remaining`
                       : `Cleared ${patientObj.clearance_time || '09:00'}`}
                   </span>
                 </div>
@@ -740,7 +959,7 @@ export function App() {
             </div>
 
             {/* ======================================================== TAB 1: MAIN BENTO DASHBOARD */}
-            {activeTab === 'dag' && st && (
+            {activeTab === 'dag' && (
               <>
                 {/* MIDDLE ROW: Left Wide "Project Overview / Discharge Telemetry" + Right "Upcoming Deadlines / DAG Milestones" */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -753,7 +972,7 @@ export function App() {
                         </h2>
                         <p className="text-xs text-slate-500 mt-0.5">
                           {restricted
-                            ? `Zero-PHI Mode · Bed ${st.bed_id} (${st.unit})`
+                            ? `Zero-PHI Mode · Bed ${st?.bed_id || '4B-12'} (${st?.unit || ''})`
                             : `${patientObj.primary_diagnosis || 'Clinical Workflow'} · ICD-10 ${(
                                 patientObj.icd10_codes || []
                               ).join(', ')}`}
@@ -786,11 +1005,10 @@ export function App() {
 
                     {/* Dual Overlapping Blue & Purple Spline Wave Chart with Floating Pill Callout */}
                     <div className="relative rounded-2xl bg-white/60 border border-white/80 p-4 pt-6">
-                      {/* Floating Callout Pill (Matches "23.2K" badge in image) */}
                       <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-xl bg-white px-3 py-1 text-xs font-extrabold text-slate-800 shadow-md border border-slate-100">
                         {lastOrchestration?.elapsed_ms
                           ? `${lastOrchestration.elapsed_ms} ms`
-                          : `v${st.state_version} OCC`}
+                          : `v${st?.state_version || 1} OCC`}
                       </div>
 
                       <svg viewBox="0 0 600 155" className="w-full h-36 overflow-visible">
@@ -805,7 +1023,6 @@ export function App() {
                           </linearGradient>
                         </defs>
 
-                        {/* Horizontal grid lines */}
                         {[25, 60, 95, 130].map((y, idx) => (
                           <g key={y}>
                             <line
@@ -823,7 +1040,6 @@ export function App() {
                           </g>
                         ))}
 
-                        {/* Purple Spline Area & Stroke (Insurance Telemetry) */}
                         <path
                           d="M 40 130 C 90 100, 130 115, 180 75 C 230 35, 265 110, 315 80 C 365 50, 420 95, 480 70 C 520 55, 555 45, 585 35 L 585 135 L 40 135 Z"
                           fill="url(#astraPurpleArea)"
@@ -836,7 +1052,6 @@ export function App() {
                           strokeLinecap="round"
                         />
 
-                        {/* Blue Spline Area & Stroke (Pharmacy Telemetry) */}
                         <path
                           d="M 40 125 C 85 65, 135 110, 190 95 C 245 80, 265 30, 315 45 C 365 60, 415 35, 475 45 C 525 50, 555 25, 585 15 L 585 135 L 40 135 Z"
                           fill="url(#astraBlueArea)"
@@ -849,7 +1064,6 @@ export function App() {
                           strokeLinecap="round"
                         />
 
-                        {/* Data node points */}
                         <circle
                           cx="315"
                           cy="45"
@@ -867,7 +1081,6 @@ export function App() {
                           strokeWidth="2"
                         />
 
-                        {/* X-Axis Stage Labels */}
                         {[
                           { x: 45, label: 'Clearance' },
                           { x: 165, label: 'Pharmacy' },
@@ -888,7 +1101,7 @@ export function App() {
                     </div>
 
                     {/* Role-Scoped Clinical Snapshot Pills */}
-                    {!restricted && st.patient && (
+                    {!restricted && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div className="rounded-2xl bg-white/75 border border-white p-3 text-xs">
                           <div className="font-bold text-slate-400 uppercase text-[10px]">
@@ -966,50 +1179,66 @@ export function App() {
                     )}
 
                     {/* Orchestrator & Judge Guard Controls */}
-                    {(role === 'PHYSICIAN' || role === 'NURSE') && (
-                      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/60">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            onClick={handleRunOrchestrator}
-                            disabled={busy}
-                            className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-4 py-2.5 text-xs font-extrabold text-white shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
-                          >
-                            <Play className="h-3.5 w-3.5 fill-current" />
-                            Run Autonomous Orchestrator
-                          </button>
-                          <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer px-2">
-                            <input
-                              type="checkbox"
-                              checked={simTimeout}
-                              onChange={(e) => setSimTimeout(e.target.checked)}
-                              className="rounded accent-blue-600"
-                            />
-                            <span>3.5s Timeout Test</span>
-                          </label>
-                        </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/60">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={handleRunOrchestrator}
+                          disabled={busy}
+                          className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-4 py-2.5 text-xs font-extrabold text-white shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
+                        >
+                          <Play className="h-3.5 w-3.5 fill-current" />
+                          Run Autonomous Orchestrator
+                        </button>
+                        <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer px-2">
+                          <input
+                            type="checkbox"
+                            checked={simTimeout}
+                            onChange={(e) => setSimTimeout(e.target.checked)}
+                            className="rounded accent-blue-600"
+                          />
+                          <span>3.5s Timeout Test</span>
+                        </label>
+                      </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            onClick={handleForceHousekeeping}
-                            disabled={busy}
-                            className="inline-flex items-center gap-1.5 rounded-2xl bg-white/80 hover:bg-white border border-white px-3 py-2 text-xs font-bold text-rose-600 shadow-xs transition cursor-pointer"
-                          >
-                            <Lock className="h-3.5 w-3.5" />
-                            Premature Clean Guard
-                          </button>
-                          <button
-                            onClick={handleSimulateCollision}
-                            disabled={busy}
-                            className="inline-flex items-center gap-1.5 rounded-2xl bg-white/80 hover:bg-white border border-white px-3 py-2 text-xs font-bold text-indigo-700 shadow-xs transition cursor-pointer"
-                          >
-                            <GitBranch className="h-3.5 w-3.5" />
-                            Parallel Race Guard
-                          </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={handleForceHousekeeping}
+                          disabled={busy}
+                          className="inline-flex items-center gap-1.5 rounded-2xl bg-white/80 hover:bg-white border border-white px-3 py-2 text-xs font-bold text-rose-600 shadow-xs transition cursor-pointer"
+                        >
+                          <Lock className="h-3.5 w-3.5" />
+                          Premature Clean
+                        </button>
+                        <button
+                          onClick={handleSimulateCollision}
+                          disabled={busy}
+                          className="inline-flex items-center gap-1.5 rounded-2xl bg-white/80 hover:bg-white border border-white px-3 py-2 text-xs font-bold text-indigo-700 shadow-xs transition cursor-pointer"
+                        >
+                          <GitBranch className="h-3.5 w-3.5" />
+                          Parallel Race
+                        </button>
+                        <button
+                          onClick={handleSimulatePromptInjection}
+                          disabled={busy}
+                          className="inline-flex items-center gap-1.5 rounded-2xl bg-white/80 hover:bg-white border border-white px-3 py-2 text-xs font-bold text-purple-700 shadow-xs transition cursor-pointer"
+                        >
+                          <ShieldAlert className="h-3.5 w-3.5" />
+                          Chaos Injection
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Guard / Collision / Injection / Orchestration Receipts */}
+                    {lastOrchestration && lastOrchestration.patient_id === patientId && (
+                      <div className="rounded-2xl bg-blue-50/90 border border-blue-200 p-3.5 text-xs text-slate-800 space-y-1">
+                        <div className="font-extrabold text-blue-800">
+                          🤖 Orchestrator Trace ({lastOrchestration.elapsed_ms || 0} ms):
                         </div>
+                        {lastOrchestration.trace.map((line, i) => (
+                          <div key={i}>• {line}</div>
+                        ))}
                       </div>
                     )}
-
-                    {/* Guard / Collision / Orchestration Receipts */}
                     {guardReceipt && (
                       <div className="rounded-2xl bg-rose-50/90 border border-rose-200 p-3 text-xs text-rose-800">
                         <strong>🛡️ Python Guard Blocked ({guardReceipt.error_type}):</strong>{' '}
@@ -1026,24 +1255,41 @@ export function App() {
                         <code>OptimisticLockConflictError</code> & retried with 0 lost updates.
                       </div>
                     )}
-                    {showRbacJson && (
-                      <pre className="max-h-56 overflow-auto rounded-2xl bg-slate-900 p-4 text-xs text-blue-200">
-                        {JSON.stringify(st, null, 2)}
-                      </pre>
+                    {promptInjectionResult && (
+                      <div className="rounded-2xl bg-purple-50/90 border border-purple-200 p-3 text-xs text-purple-950 space-y-1">
+                        <div className="font-extrabold text-purple-800">
+                          🛡️ Chaos Prompt-Injection Blocked (Guard Held:{' '}
+                          {String(promptInjectionResult.guard_held)})
+                        </div>
+                        <div className="text-[11px]">
+                          <strong>Attempted Call:</strong>{' '}
+                          <code>{promptInjectionResult.attempted_tool_call}</code>
+                        </div>
+                        <div className="text-[11px] text-rose-700 font-semibold">
+                          <strong>Python Guard Receipt:</strong>{' '}
+                          {promptInjectionResult.python_guard_receipt.error_type} —{' '}
+                          {promptInjectionResult.python_guard_receipt.message}
+                        </div>
+                      </div>
                     )}
                   </div>
 
-                  {/* Right Column: "Upcoming Deadlines" Style DAG Milestones & Turnover Actions */}
+                  {/* Right Column: "Upcoming Deadlines" Style Interactive DAG Milestones & Turnover Actions */}
                   <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-6 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex flex-col justify-between space-y-4">
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
-                        <h3 className="text-base font-extrabold text-slate-900">
-                          DAG Milestones
-                        </h3>
+                        <div>
+                          <h3 className="text-base font-extrabold text-slate-900">
+                            DAG Milestones
+                          </h3>
+                          <p className="text-[11px] text-slate-500">
+                            Click any node to inspect state diffs
+                          </p>
+                        </div>
                         <MoreHorizontal className="h-4 w-4 text-slate-400" />
                       </div>
 
-                      {restricted && (
+                      {restricted && st && (
                         <div className="rounded-2xl bg-white/80 border border-white p-3.5 text-xs space-y-1">
                           <div className="text-[10px] font-extrabold uppercase text-rose-600">
                             {st.turnover_status?.replace(/_/g, ' ')}
@@ -1054,7 +1300,7 @@ export function App() {
                         </div>
                       )}
 
-                      <div className="space-y-3">
+                      <div className="space-y-2.5">
                         {Object.entries(dagNodes).map(([mid, info]) => {
                           const meta = NODE_META[mid] || {
                             title: mid,
@@ -1065,7 +1311,8 @@ export function App() {
                           return (
                             <div
                               key={mid}
-                              className="flex items-center justify-between gap-3 rounded-2xl bg-white/75 border border-white p-3 shadow-xs"
+                              onClick={() => handleInspectNode(mid)}
+                              className="flex items-center justify-between gap-3 rounded-2xl bg-white/80 hover:bg-white border border-white p-3 shadow-xs transition cursor-pointer"
                             >
                               <div className="flex items-center gap-3 min-w-0">
                                 <div className={`w-1 h-9 rounded-full shrink-0 ${meta.barColor}`} />
@@ -1088,6 +1335,35 @@ export function App() {
                         })}
                       </div>
 
+                      {/* Inspected DAG Node Time-Travel Diff Drawer */}
+                      {inspectedNode && (
+                        <div className="rounded-2xl bg-slate-900 text-slate-100 p-3.5 text-xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-blue-300">
+                              Node: {inspectedNode.milestone_id.replace(/_/g, ' ')}
+                            </span>
+                            <button
+                              onClick={() => setInspectedNode(null)}
+                              className="text-slate-400 hover:text-white cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          <div className="text-[11px] text-slate-300">
+                            Status: <strong>{inspectedNode.node_info.status}</strong> · Locked:{' '}
+                            <strong>{String(inspectedNode.node_info.locked_by_dag)}</strong>
+                          </div>
+                          {inspectedNode.node_info.notes && (
+                            <div className="text-[11px] text-amber-300">
+                              Notes: {inspectedNode.node_info.notes}
+                            </div>
+                          )}
+                          <div className="text-[10px] text-slate-400">
+                            Transitions logged: {inspectedNode.state_diffs.length}
+                          </div>
+                        </div>
+                      )}
+
                       {flashReceipt && (
                         <div
                           className={`rounded-2xl p-3 text-xs font-semibold ${
@@ -1104,86 +1380,142 @@ export function App() {
 
                     {/* Bottom Action Buttons (Matches "View All" blue pill button in image) */}
                     <div className="space-y-2 pt-2">
-                      {['NURSE', 'TRANSPORT', 'PHYSICIAN'].includes(role) && (
-                        <button
-                          onClick={() => handleDownstreamAction('Patient_Departed')}
-                          disabled={busy}
-                          className="w-full rounded-2xl bg-blue-600 hover:bg-blue-500 py-2.5 px-4 text-xs font-extrabold text-white shadow-md shadow-blue-600/25 transition cursor-pointer"
-                        >
-                          Confirm Patient Departed
-                        </button>
-                      )}
-                      {['NURSE', 'HOUSEKEEPING'].includes(role) && (
-                        <button
-                          onClick={() => handleDownstreamAction('Housekeeping_Dispatched')}
-                          disabled={busy}
-                          className="w-full rounded-2xl bg-indigo-600 hover:bg-indigo-500 py-2.5 px-4 text-xs font-extrabold text-white shadow-md shadow-indigo-600/25 transition cursor-pointer"
-                        >
-                          Dispatch Housekeeping (EVS)
-                        </button>
-                      )}
+                      <button
+                        onClick={() => handleDownstreamAction('Patient_Departed')}
+                        disabled={busy}
+                        className="w-full rounded-2xl bg-blue-600 hover:bg-blue-500 py-2.5 px-4 text-xs font-extrabold text-white shadow-md shadow-blue-600/25 transition cursor-pointer"
+                      >
+                        Confirm Patient Departed
+                      </button>
+                      <button
+                        onClick={() => handleDownstreamAction('Housekeeping_Dispatched')}
+                        disabled={busy}
+                        className="w-full rounded-2xl bg-indigo-600 hover:bg-indigo-500 py-2.5 px-4 text-xs font-extrabold text-white shadow-md shadow-indigo-600/25 transition cursor-pointer"
+                      >
+                        Dispatch Housekeeping (EVS)
+                      </button>
                     </div>
                   </div>
                 </div>
+
+                {/* PREDICTIVE ETA & FAMILY CURBSIDE RIDE-SYNC ROW */}
+                {(etaData || rideSyncData) && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                    {etaData && (
+                      <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-xs flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-extrabold uppercase tracking-wider text-blue-700 flex items-center gap-1.5">
+                            <Clock className="h-4 w-4" />
+                            Predictive Cascade ETA Engine
+                          </div>
+                          <div className="text-sm font-bold text-slate-800 mt-1">
+                            Bed Ready at{' '}
+                            <span className="text-blue-600 font-extrabold">
+                              {etaData.active_projection.predicted_bed_ready_eta}
+                            </span>{' '}
+                            ({etaData.active_projection.total_remaining_minutes} mins remaining)
+                          </div>
+                          {etaData.minutes_saved_if_resolved_now > 0 && (
+                            <div className="text-xs text-emerald-700 font-semibold mt-0.5">
+                              Saves {etaData.minutes_saved_if_resolved_now} mins if blockers resolved
+                              now
+                            </div>
+                          )}
+                        </div>
+                        <label className="flex items-center gap-2 rounded-2xl bg-white/80 border border-white px-3.5 py-2 text-xs font-bold text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={simulateResolvedWhatIf}
+                            onChange={(e) => setSimulateResolvedWhatIf(e.target.checked)}
+                            className="rounded accent-blue-600"
+                          />
+                          <span>What-If: Resolve Blockers</span>
+                        </label>
+                      </div>
+                    )}
+
+                    {rideSyncData && (
+                      <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-xs space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 flex items-center gap-1.5">
+                            <Car className="h-4 w-4" />
+                            Family Curbside Ride-Sync (Zero-PHI SMS)
+                          </span>
+                          <span className="rounded-full bg-emerald-100 text-emerald-800 px-2.5 py-0.5 text-[10px] font-bold">
+                            {rideSyncData.ride_status.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                        <div className="text-xs font-semibold text-slate-800">
+                          {rideSyncData.pickup_lobby} · Pickup ETA: {rideSyncData.pickup_time}
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate">
+                          SMS: &ldquo;{rideSyncData.sanitized_sms}&rdquo;
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* BOTTOM ROW: Left Wide "Recent Activity & Specialist Queue" + Right "Team Members (Role Switcher)" */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
                   {/* Left 2 Columns: Specialist HITL Queue + Recent Activity (Audit Log) */}
                   <div className="lg:col-span-2 rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-6 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] space-y-4">
-                    {/* Specialist Escalation Queue if Pharmacist / Insurance Specialist */}
-                    {specialistMilestone && (
-                      <div className="rounded-2xl bg-amber-50/90 border border-amber-200 p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-extrabold text-amber-900 flex items-center gap-1.5">
-                            <ClipboardCheck className="h-4 w-4 text-amber-600" />
-                            Specialist Escalation Queue ({specialistMilestone.replace(/_/g, ' ')})
-                          </span>
-                          <span className="rounded-full bg-amber-200 px-2.5 py-0.5 text-[10px] font-extrabold text-amber-900">
-                            {openSpecialistTickets.length} Open
-                          </span>
-                        </div>
-                        {openSpecialistTickets.length === 0 ? (
-                          <div className="text-xs text-slate-600">
-                            No open escalations for {specialistMilestone}.
+                    {/* Specialist Escalation Queue if Pharmacist / Insurance Specialist or open tickets exist */}
+                    {(specialistMilestone || escalations.some((t) => t.status === 'OPEN')) &&
+                      !restricted && (
+                        <div className="rounded-2xl bg-amber-50/90 border border-amber-200 p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-extrabold text-amber-900 flex items-center gap-1.5">
+                              <ClipboardCheck className="h-4 w-4 text-amber-600" />
+                              Specialist Escalation Queue
+                            </span>
+                            <span className="rounded-full bg-amber-200 px-2.5 py-0.5 text-[10px] font-extrabold text-amber-900">
+                              {escalations.filter((t) => t.status === 'OPEN').length} Open
+                            </span>
                           </div>
-                        ) : (
-                          openSpecialistTickets.map((t) => (
-                            <div
-                              key={t.id}
-                              className="rounded-xl bg-white p-3.5 border border-amber-200 space-y-2.5"
-                            >
-                              <div className="text-xs font-bold text-slate-800">
-                                Ticket #{t.id} · {t.reason_code}
-                              </div>
-                              <pre className="whitespace-pre-wrap text-[11px] text-slate-600 bg-slate-50 p-2.5 rounded-lg">
-                                {t.summary}
-                              </pre>
-                              <textarea
-                                rows={2}
-                                value={resolutionNotes[t.id] || ''}
-                                onChange={(e) =>
-                                  setResolutionNotes({
-                                    ...resolutionNotes,
-                                    [t.id]: e.target.value,
-                                  })
-                                }
-                                placeholder="Enter mandatory specialist resolution notes..."
-                                className="w-full rounded-xl border border-slate-200 px-3 py-1.5 text-xs"
-                              />
-                              <button
-                                onClick={() => handleResolveEscalation(t)}
-                                disabled={busy}
-                                className="rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+                          {escalations
+                            .filter((t) => t.status === 'OPEN')
+                            .map((t) => (
+                              <div
+                                key={t.id}
+                                className="rounded-xl bg-white p-3.5 border border-amber-200 space-y-2.5"
                               >
-                                {role === 'PHARMACIST'
-                                  ? 'Approve Substitution / Stock Transfer'
-                                  : 'Submit Prior Auth Override'}
-                              </button>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    )}
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-slate-800">
+                                    Ticket #{t.id} · {t.reason_code} ({t.milestone_id})
+                                  </span>
+                                  <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                    Assigned: {t.assigned_role}
+                                  </span>
+                                </div>
+                                <pre className="whitespace-pre-wrap text-[11px] text-slate-600 bg-slate-50 p-2.5 rounded-lg">
+                                  {t.summary}
+                                </pre>
+                                <textarea
+                                  rows={2}
+                                  value={resolutionNotes[t.id] || ''}
+                                  onChange={(e) =>
+                                    setResolutionNotes({
+                                      ...resolutionNotes,
+                                      [t.id]: e.target.value,
+                                    })
+                                  }
+                                  placeholder="Enter specialist resolution notes..."
+                                  className="w-full rounded-xl border border-slate-200 px-3 py-1.5 text-xs"
+                                />
+                                <button
+                                  onClick={() => handleResolveEscalation(t)}
+                                  disabled={busy}
+                                  className="rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+                                >
+                                  {role === t.assigned_role
+                                    ? 'Approve & Resolve Exception'
+                                    : `Switch to ${t.assigned_role} or Click to Test RBAC Guard`}
+                                </button>
+                              </div>
+                            ))}
+                        </div>
+                      )}
 
                     <div className="flex items-center justify-between">
                       <h3 className="text-base font-extrabold text-slate-900">
@@ -1193,56 +1525,66 @@ export function App() {
                     </div>
 
                     <div className="space-y-2.5">
-                      {auditEntries.slice(0, 5).map((row) => (
-                        <div
-                          key={row.id}
-                          className="flex items-center justify-between gap-3 rounded-2xl bg-white/75 border border-white px-4 py-3 shadow-xs"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div
-                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-extrabold text-white ${
-                                row.outcome === 'APPLIED'
-                                  ? 'bg-gradient-to-tr from-blue-600 to-indigo-500'
-                                  : 'bg-gradient-to-tr from-rose-500 to-pink-500'
-                              }`}
-                            >
-                              {row.actor.slice(0, 2)}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-xs font-extrabold text-slate-800 truncate">
-                                {row.actor} · {row.milestone_id || row.tool_called}{' '}
-                                {row.version_transition && (
-                                  <span className="font-mono text-blue-600">
-                                    ({row.version_transition})
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[11px] text-slate-500 truncate">
-                                {restricted
-                                  ? row.outcome
-                                  : row.message || row.outcome}
-                              </div>
-                            </div>
-                          </div>
-                          <span className="text-[11px] font-medium text-slate-400 shrink-0">
-                            {row.timestamp.slice(11, 19)}
-                          </span>
+                      {auditEntries.length === 0 ? (
+                        <div className="rounded-2xl bg-white/75 border border-white p-4 text-xs text-slate-500">
+                          Click <strong>Run Autonomous Orchestrator</strong> or{' '}
+                          <strong>⚡ Auto-Pilot</strong> to generate live audit trail events.
                         </div>
-                      ))}
+                      ) : (
+                        auditEntries.slice(0, 6).map((row) => (
+                          <div
+                            key={row.id}
+                            className="flex items-center justify-between gap-3 rounded-2xl bg-white/75 border border-white px-4 py-3 shadow-xs"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div
+                                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-extrabold text-white ${
+                                  row.outcome === 'APPLIED'
+                                    ? 'bg-gradient-to-tr from-blue-600 to-indigo-500'
+                                    : 'bg-gradient-to-tr from-rose-500 to-pink-500'
+                                }`}
+                              >
+                                {row.actor.slice(0, 2)}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-xs font-extrabold text-slate-800 truncate">
+                                  {row.actor} · {row.milestone_id || row.tool_called}{' '}
+                                  {row.version_transition && (
+                                    <span className="font-mono text-blue-600">
+                                      ({row.version_transition})
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-slate-500 truncate">
+                                  {restricted ? row.outcome : row.message || row.outcome}
+                                </div>
+                              </div>
+                            </div>
+                            <span className="text-[11px] font-medium text-slate-400 shrink-0">
+                              {row.timestamp.slice(11, 19)}
+                            </span>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
 
                   {/* Right Column: "Team Members" Card (Interactive RBAC Role Switcher) */}
                   <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-6 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] space-y-4">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-base font-extrabold text-slate-900">
-                        Team Members (RBAC)
-                      </h3>
+                      <div>
+                        <h3 className="text-base font-extrabold text-slate-900">
+                          Team Members (RBAC)
+                        </h3>
+                        <p className="text-[11px] text-slate-500">
+                          Click a staff member to switch role
+                        </p>
+                      </div>
                       <MoreHorizontal className="h-4 w-4 text-slate-400" />
                     </div>
 
                     <div className="space-y-2.5">
-                      {(config?.roles || []).map((r) => {
+                      {rolesList.map((r) => {
                         const tProf = TEAM_PROFILES[r.id] || TEAM_PROFILES.PHYSICIAN;
                         const active = r.id === role;
                         return (
@@ -1300,9 +1642,9 @@ export function App() {
             )}
 
             {/* ======================================================== TAB 2: ED SURGE */}
-            {activeTab === 'surge' && surgeData && (
+            {activeTab === 'surge' && (
               <div className="space-y-5">
-                {surgeData.top_target && (
+                {surgeData?.top_target && (
                   <div className="rounded-3xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 p-6 text-white shadow-lg flex flex-wrap items-center justify-between gap-4">
                     <div className="space-y-1">
                       <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-0.5 text-xs font-extrabold">
@@ -1339,7 +1681,7 @@ export function App() {
                       Waiting ER Boarding Queue
                     </h3>
                     <div className="space-y-2.5">
-                      {surgeData.ed_boarding_queue.map((b) => (
+                      {(surgeData?.ed_boarding_queue || []).map((b) => (
                         <div
                           key={b.boarder_id}
                           className="rounded-2xl bg-white/80 border border-white p-3.5 flex items-center justify-between shadow-xs"
@@ -1389,7 +1731,7 @@ export function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200/50">
-                        {surgeData.ranked_beds.map((r) => (
+                        {(surgeData?.ranked_beds || []).map((r) => (
                           <tr key={r.bed_id}>
                             <td className="py-3 pr-2 font-extrabold text-blue-600">
                               #{r.priority_rank}
