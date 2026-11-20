@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChatWidget } from './components/ChatWidget';
+import { EmergencyChatPanel } from './components/EmergencyChatPanel';
+import { EmergencyChatWidget } from './components/EmergencyChatWidget';
 import {
   Activity,
   AlertTriangle,
@@ -37,6 +39,7 @@ import {
 import {
   api,
   type AuditEntry,
+  type ChatMessageItem,
   type CollisionTestResult,
   type DAGNodeInfo,
   type DagNodeInspectorResult,
@@ -53,7 +56,7 @@ import {
   type SystemConfig,
 } from './api/client';
 
-type TabId = 'dag' | 'curveballs' | 'surge' | 'multi' | 'roi';
+type TabId = 'dag' | 'chat' | 'curveballs' | 'surge' | 'multi' | 'roi';
 
 const TEAM_PROFILES: Record<
   RoleId,
@@ -265,6 +268,11 @@ export function App() {
   const [slaMinutesInput, setSlaMinutesInput] = useState(30);
   const [u35Result, setU35Result] = useState<Record<string, any> | null>(null);
 
+  // Emergency Doctor <-> Nurse <-> Pharmacist Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessageItem[]>([]);
+  const [chatRestricted, setChatRestricted] = useState(false);
+  const [chatUrgentCount, setChatUrgentCount] = useState(0);
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const refreshPatientWorkspace = async (
@@ -273,7 +281,7 @@ export function App() {
     whatIf = simulateResolvedWhatIf
   ) => {
     try {
-      const [cfg, ptList, st, aud, esc, surge, instr, eta, ride] = await Promise.all([
+      const [cfg, ptList, st, aud, esc, surge, instr, eta, ride, chatRes] = await Promise.all([
         config ? Promise.resolve(config) : api.getConfig(),
         api.listPatients(currentRole),
         api.getPatientState(pid, currentRole),
@@ -283,6 +291,7 @@ export function App() {
         api.getInstructions(pid, targetLang, currentRole),
         api.getPredictiveEta(pid, whatIf).catch(() => null),
         api.getRideSync(pid).catch(() => null),
+        api.getChatMessages(pid, currentRole).catch(() => null),
       ]);
       if (!config) setConfig(cfg);
       setPatients(ptList.patients);
@@ -293,6 +302,11 @@ export function App() {
       setInstructionData(instr);
       if (eta) setEtaData(eta);
       if (ride) setRideSyncData(ride);
+      if (chatRes) {
+        setChatMessages(chatRes.messages);
+        setChatRestricted(chatRes.restricted);
+        setChatUrgentCount(chatRes.urgent_count);
+      }
       if (instr.record?.instructions_text) {
         setEditableInstructions(instr.record.instructions_text);
       }
@@ -628,11 +642,12 @@ export function App() {
               {/* Navigation Menu */}
               <nav className="space-y-1.5">
                 {[
-                  { id: 'dag', label: 'Dashboard', icon: LayoutGrid },
-                  { id: 'curveballs', label: 'Round 2 Curveballs', icon: ShieldAlert },
-                  { id: 'surge', label: 'ED Surge Queue', icon: FolderKanban },
-                  { id: 'roi', label: 'Analytics & ROI', icon: BarChart3 },
-                  { id: 'multi', label: 'Discharge Reports', icon: FileText },
+                  { id: 'dag', label: 'Dashboard', icon: LayoutGrid, badge: 0 },
+                  { id: 'chat', label: 'Emergency Chat', icon: MessageSquare, badge: chatUrgentCount },
+                  { id: 'curveballs', label: 'Round 2 Curveballs', icon: ShieldAlert, badge: 0 },
+                  { id: 'surge', label: 'ED Surge Queue', icon: FolderKanban, badge: 0 },
+                  { id: 'roi', label: 'Analytics & ROI', icon: BarChart3, badge: 0 },
+                  { id: 'multi', label: 'Discharge Reports', icon: FileText, badge: 0 },
                 ].map((item) => {
                   const IconComp = item.icon;
                   const active = activeTab === item.id;
@@ -640,16 +655,23 @@ export function App() {
                     <button
                       key={item.id}
                       onClick={() => setActiveTab(item.id as TabId)}
-                      className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer ${
+                      className={`w-full flex items-center justify-between gap-2 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer ${
                         active
                           ? 'bg-white/85 text-slate-900 font-bold shadow-[0_8px_20px_-6px_rgba(79,103,232,0.18)] border border-white'
                           : 'text-slate-700 hover:bg-white/40 font-medium'
                       }`}
                     >
-                      <IconComp
-                        className={`h-4.5 w-4.5 ${active ? 'text-blue-600' : 'text-slate-500'}`}
-                      />
-                      <span>{item.label}</span>
+                      <span className="flex items-center gap-3.5">
+                        <IconComp
+                          className={`h-4.5 w-4.5 ${active ? 'text-blue-600' : 'text-slate-500'}`}
+                        />
+                        <span>{item.label}</span>
+                      </span>
+                      {item.badge > 0 && (
+                        <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-extrabold text-white">
+                          {item.badge}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -1678,6 +1700,38 @@ export function App() {
               </>
             )}
 
+            {/* ======================================================== EMERGENCY CARE-TEAM CHAT TAB */}
+            {activeTab === 'chat' && (
+              <EmergencyChatPanel
+                patientId={patientId}
+                patientName={patientObj.patient_name || `Patient #${patientId}`}
+                bedId={patientObj.bed_id || stateResp?.state?.bed_id || 'Assigned Bed'}
+                role={role}
+                messages={chatMessages}
+                restricted={chatRestricted}
+                urgentCount={chatUrgentCount}
+                onRefresh={() => refreshPatientWorkspace(patientId, role)}
+                onRevokeFromAlert={async (reason) => {
+                  setBusy(true);
+                  try {
+                    await api.bookTransport(patientId, 'TRANSPORT');
+                    const res = await api.revokeClearance(patientId, reason, 'PHYSICIAN');
+                    setU31Result(res);
+                    setFlashReceipt({
+                      success: true,
+                      patient_id: patientId,
+                      milestone_id: 'Clinical_Clearance',
+                      requested_status: 'BLOCKED_EXCEPTION',
+                      message: 'Paused discharge & cancelled transport due to STAT chat alert.',
+                    });
+                    await refreshPatientWorkspace(patientId, role);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              />
+            )}
+
             {/* ======================================================== ROUND 2 CURVEBALLS TAB (U-3.1 TO U-3.5) */}
             {activeTab === 'curveballs' && (
               <div className="space-y-5">
@@ -2448,12 +2502,24 @@ export function App() {
         </div>
       </div>
 
-      <ChatWidget
-        patientId={patientId}
-        role={role}
-        restricted={restricted}
-        roleLabel={activeRoleMeta?.label || role}
-      />
+      <div className="fixed bottom-5 right-5 z-50 flex items-end gap-2.5">
+        <EmergencyChatWidget
+          patientId={patientId}
+          bedId={patientObj.bed_id || stateResp?.state?.bed_id || 'Assigned Bed'}
+          role={role}
+          messages={chatMessages}
+          restricted={chatRestricted}
+          urgentCount={chatUrgentCount}
+          onRefresh={() => refreshPatientWorkspace(patientId, role)}
+          onOpenFullTab={() => setActiveTab('chat')}
+        />
+        <ChatWidget
+          patientId={patientId}
+          role={role}
+          restricted={restricted}
+          roleLabel={activeRoleMeta?.label || role}
+        />
+      </div>
     </div>
   );
 }

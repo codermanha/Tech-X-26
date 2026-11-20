@@ -90,9 +90,9 @@ export function ChatWidget({ patientId, role, restricted, roleLabel }: ChatWidge
   };
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end">
+    <div className="relative flex flex-col items-end">
       {open && (
-        <div className="mb-3 w-[360px] sm:w-[400px] h-[520px] rounded-3xl bg-white/90 backdrop-blur-xl border border-slate-200/90 shadow-2xl flex flex-col overflow-hidden">
+        <div className="mb-3 w-[360px] sm:w-[400px] h-[520px] rounded-3xl bg-white/95 backdrop-blur-xl border border-slate-200/90 shadow-2xl flex flex-col overflow-hidden">
           <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 px-4 py-3.5 text-white flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white/20">

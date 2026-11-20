@@ -57,6 +57,37 @@ def seed_database(reset: bool = True) -> int:
                 "INSERT OR REPLACE INTO ed_boarding_queue VALUES (?,?,?,?)",
                 (b["boarder_id"], b["acuity"], b["needs_unit"], b["waiting_hours"]),
             )
+        # Seed initial Emergency Care-Team & Patient chat thread for flagship case #402
+        conn.execute(
+            """INSERT INTO chat_messages
+               (patient_id, sender_type, sender_name, recipient, message, priority, was_sanitized, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                "402",
+                "PHYSICIAN",
+                "Sarah Chen, MD (Physician)",
+                "PHARMACIST",
+                "Hi Nathan, I signed clinical clearance for Elena (#402, Bed 4B-12). Please verify Eliquis renal dosing and ping me immediately if any hold is needed.",
+                "NORMAL",
+                0,
+                utc_now(),
+            ),
+        )
+        conn.execute(
+            """INSERT INTO chat_messages
+               (patient_id, sender_type, sender_name, recipient, message, priority, was_sanitized, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                "402",
+                "NURSE",
+                "Elena Brooks, RN (Nurse)",
+                "PHYSICIAN",
+                "Copy Dr. Chen — vitals are stable at bedside (Bed 4B-12). Standing by for Pharmacy & Insurance clearance before calling transport.",
+                "NORMAL",
+                0,
+                utc_now(),
+            ),
+        )
         log_audit_event("*", "SYSTEM", "seed_database", "APPLIED",
                         f"Seeded {len(data['patients'])} patients", conn=conn)
         conn.execute("COMMIT")

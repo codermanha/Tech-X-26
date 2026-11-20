@@ -68,6 +68,17 @@ CREATE TABLE discharge_instructions (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (patient_id, language)
 );
+CREATE TABLE chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id TEXT NOT NULL,
+    sender_type TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    recipient TEXT NOT NULL DEFAULT 'CARE_TEAM',
+    message TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'NORMAL',
+    was_sanitized INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,
@@ -87,6 +98,7 @@ BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 
 TABLES = [
     "audit_log",
+    "chat_messages",
     "discharge_instructions",
     "ed_boarding_queue",
     "escalations",

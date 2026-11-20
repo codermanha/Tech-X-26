@@ -208,6 +208,26 @@ export interface DagNodeInspectorResult {
   rbac_payload_for_role: Record<string, any>;
 }
 
+export interface ChatMessageItem {
+  id: number;
+  patient_id: string;
+  sender_type: string;
+  sender_name: string;
+  recipient?: string;
+  message: string;
+  priority: 'NORMAL' | 'URGENT';
+  was_sanitized: boolean;
+  created_at: string;
+}
+
+export interface ChatThreadResponse {
+  patient_id: string;
+  restricted: boolean;
+  urgent_count: number;
+  messages: ChatMessageItem[];
+  message?: string;
+}
+
 export interface ShiftHandoffResult {
   metrics: {
     total_active_discharges: number;
@@ -463,6 +483,43 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  getChatMessages: (patientId: string, role: RoleId) =>
+    request<ChatThreadResponse>(
+      `/api/patients/${encodeURIComponent(patientId)}/chat?role=${encodeURIComponent(role)}`
+    ),
+  sendChatMessage: (
+    patientId: string,
+    payload: {
+      sender_type: string;
+      recipient?: string;
+      message: string;
+      urgent?: boolean;
+      ask_ai_triage?: boolean;
+      role?: RoleId;
+    }
+  ) =>
+    request<{
+      success: boolean;
+      was_sanitized: boolean;
+      flagged_commands: string[];
+      priority: 'NORMAL' | 'URGENT';
+      sent_message: ChatMessageItem;
+      ai_reply: ChatMessageItem | null;
+    }>(
+      `/api/patients/${encodeURIComponent(patientId)}/chat/send?role=${encodeURIComponent(
+        payload.role || 'PHYSICIAN'
+      )}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sender_type: payload.sender_type,
+          recipient: payload.recipient || 'CARE_TEAM',
+          message: payload.message,
+          urgent: Boolean(payload.urgent),
+          ask_ai_triage: payload.ask_ai_triage ?? true,
+        }),
+      }
+    ),
   chat: (payload: {
     message: string;
     patient_id: string;
