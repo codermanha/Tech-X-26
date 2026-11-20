@@ -14,9 +14,15 @@ SEED_PATH = ROOT_DIR / "data" / "seed_cases.json"
 
 
 def get_db_path() -> Path:
-    """Resolved at call time so tests can point DB_PATH at a temp file."""
-    p = Path(os.environ.get("DB_PATH", "data/hospital_discharge_cases.sqlite"))
-    return p if p.is_absolute() else ROOT_DIR / p
+    """Resolved at call time so tests can point DB_PATH at a temp file,
+    and Vercel serverless functions automatically use writable /tmp."""
+    env_path = os.environ.get("DB_PATH")
+    if env_path:
+        p = Path(env_path)
+        return p if p.is_absolute() else ROOT_DIR / p
+    if os.environ.get("VERCEL"):
+        return Path("/tmp/hospital_discharge_cases.sqlite")
+    return ROOT_DIR / "data" / "hospital_discharge_cases.sqlite"
 
 
 def get_subsystem_timeout() -> float:

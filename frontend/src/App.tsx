@@ -24,6 +24,7 @@ import {
   Play,
   RefreshCw,
   Search,
+  Send,
   Settings,
   ShieldAlert,
   Sparkles,
@@ -31,11 +32,13 @@ import {
   Truck,
   Unlock,
   Users,
+  X,
   Zap,
 } from 'lucide-react';
 import {
   api,
   type AuditEntry,
+  type ChatMessageItem,
   type CollisionTestResult,
   type DAGNodeInfo,
   type DagNodeInspectorResult,
@@ -52,7 +55,7 @@ import {
   type SystemConfig,
 } from './api/client';
 
-type TabId = 'dag' | 'curveballs' | 'surge' | 'multi' | 'roi';
+type TabId = 'dag' | 'chat' | 'curveballs' | 'surge' | 'multi' | 'roi';
 
 const TEAM_PROFILES: Record<
   RoleId,
@@ -264,6 +267,20 @@ export function App() {
   const [slaMinutesInput, setSlaMinutesInput] = useState(30);
   const [u35Result, setU35Result] = useState<Record<string, any> | null>(null);
 
+  // Urgent Patient <-> Doctor Live Chat & AI Triage Bot state
+  const [chatMessages, setChatMessages] = useState<ChatMessageItem[]>([]);
+  const [chatRestricted, setChatRestricted] = useState(false);
+  const [chatUrgentCount, setChatUrgentCount] = useState(0);
+  const [chatSenderType, setChatSenderType] = useState<'PATIENT' | 'PHYSICIAN' | 'NURSE'>(
+    'PATIENT'
+  );
+  const [chatInput, setChatInput] = useState('');
+  const [chatUrgentFlag, setChatUrgentFlag] = useState(false);
+  const [chatAskAi, setChatAskAi] = useState(true);
+  const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatSanitizedNotice, setChatSanitizedNotice] = useState<string | null>(null);
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const refreshPatientWorkspace = async (
@@ -272,7 +289,7 @@ export function App() {
     whatIf = simulateResolvedWhatIf
   ) => {
     try {
-      const [cfg, ptList, st, aud, esc, surge, instr, eta, ride] = await Promise.all([
+      const [cfg, ptList, st, aud, esc, surge, instr, eta, ride, chatRes] = await Promise.all([
         config ? Promise.resolve(config) : api.getConfig(),
         api.listPatients(currentRole),
         api.getPatientState(pid, currentRole),
@@ -282,6 +299,7 @@ export function App() {
         api.getInstructions(pid, targetLang, currentRole),
         api.getPredictiveEta(pid, whatIf).catch(() => null),
         api.getRideSync(pid).catch(() => null),
+        api.getChatMessages(pid, currentRole).catch(() => null),
       ]);
       if (!config) setConfig(cfg);
       setPatients(ptList.patients);
@@ -292,12 +310,45 @@ export function App() {
       setInstructionData(instr);
       if (eta) setEtaData(eta);
       if (ride) setRideSyncData(ride);
+      if (chatRes) {
+        setChatMessages(chatRes.messages);
+        setChatRestricted(chatRes.restricted);
+        setChatUrgentCount(chatRes.urgent_count);
+      }
       if (instr.record?.instructions_text) {
         setEditableInstructions(instr.record.instructions_text);
       }
       setErrorMsg(null);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Connecting to FastAPI backend on port 8000...');
+      setErrorMsg(err.message || 'Connecting to FastAPI backend...');
+    }
+  };
+
+  const handleSendChat = async (overrideMsg?: string, forceUrgent?: boolean) => {
+    const text = (overrideMsg ?? chatInput).trim();
+    if (!text) return;
+    setChatSending(true);
+    setChatSanitizedNotice(null);
+    try {
+      const res = await api.sendChatMessage(patientId, {
+        sender_type: chatSenderType,
+        message: text,
+        urgent: forceUrgent ?? chatUrgentFlag,
+        ask_ai_triage: chatAskAi,
+        role,
+      });
+      if (res.was_sanitized) {
+        setChatSanitizedNotice(
+          `Python Sanitizer stripped embedded command(s): ${res.flagged_commands.join(', ')}`
+        );
+      }
+      if (!overrideMsg) setChatInput('');
+      setChatUrgentFlag(false);
+      await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setChatSending(false);
     }
   };
 
@@ -628,27 +679,35 @@ export function App() {
               <nav className="space-y-1.5">
                 {[
                   { id: 'dag', label: 'Dashboard', icon: LayoutGrid },
+                  { id: 'chat', label: 'Urgent Doctor Chat', icon: MessageSquare, badge: chatUrgentCount },
                   { id: 'curveballs', label: 'Round 2 Curveballs', icon: ShieldAlert },
                   { id: 'surge', label: 'ED Surge Queue', icon: FolderKanban },
                   { id: 'roi', label: 'Analytics & ROI', icon: BarChart3 },
                   { id: 'multi', label: 'Discharge Reports', icon: FileText },
-                ].map((item) => {
+                ].map((item: any) => {
                   const IconComp = item.icon;
                   const active = activeTab === item.id;
                   return (
                     <button
                       key={item.id}
                       onClick={() => setActiveTab(item.id as TabId)}
-                      className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer ${
+                      className={`w-full flex items-center justify-between gap-2 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer ${
                         active
                           ? 'bg-white/85 text-slate-900 font-bold shadow-[0_8px_20px_-6px_rgba(79,103,232,0.18)] border border-white'
                           : 'text-slate-700 hover:bg-white/40 font-medium'
                       }`}
                     >
-                      <IconComp
-                        className={`h-4.5 w-4.5 ${active ? 'text-blue-600' : 'text-slate-500'}`}
-                      />
-                      <span>{item.label}</span>
+                      <span className="flex items-center gap-3.5">
+                        <IconComp
+                          className={`h-4.5 w-4.5 ${active ? 'text-blue-600' : 'text-slate-500'}`}
+                        />
+                        <span>{item.label}</span>
+                      </span>
+                      {item.badge > 0 && (
+                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-extrabold text-white">
+                          {item.badge}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -793,11 +852,16 @@ export function App() {
                 </button>
 
                 <button
-                  onClick={() => setShowRbacJson(!showRbacJson)}
-                  title="Inspect RBAC Payload"
-                  className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/75 hover:bg-white border border-white text-slate-700 shadow-xs transition cursor-pointer"
+                  onClick={() => setChatDrawerOpen(!chatDrawerOpen)}
+                  title="Open Immediate Patient <-> Doctor Chat"
+                  className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-white/75 hover:bg-white border border-white text-blue-600 shadow-xs transition cursor-pointer"
                 >
                   <MessageSquare className="h-4 w-4" />
+                  {chatUrgentCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] font-extrabold text-white">
+                      {chatUrgentCount}
+                    </span>
+                  )}
                 </button>
 
                 <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-white/75 border border-white text-slate-700 shadow-xs">
@@ -1677,6 +1741,226 @@ export function App() {
               </>
             )}
 
+            {/* ======================================================== URGENT PATIENT <-> DOCTOR CHATBOT TAB */}
+            {activeTab === 'chat' && (
+              <div className="space-y-5">
+                <div className="rounded-3xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 p-5 text-white shadow-lg flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-0.5 text-[11px] font-extrabold uppercase tracking-wider">
+                      💬 Real-Time Immediate Care Messaging &amp; Triage Bot
+                    </span>
+                    <h2 className="mt-1.5 text-xl font-extrabold">
+                      Patient ↔ Doctor Urgent Messaging ({patientDisplayName})
+                    </h2>
+                    <p className="text-xs text-blue-100 mt-0.5">
+                      Immediate two-way texting between Patient/Family and Attending Doctor/Nurse —
+                      protected by Python Command Sanitizer &amp; Zero-PHI RBAC Guard.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-2xl bg-white/15 px-3 py-1.5 text-xs font-bold">
+                      {chatUrgentCount} Urgent Alert(s)
+                    </span>
+                  </div>
+                </div>
+
+                {chatRestricted ? (
+                  <div className="rounded-3xl bg-white/75 border border-rose-200 p-6 text-sm text-rose-800 flex items-center gap-3">
+                    <Lock className="h-5 w-5 text-rose-500 shrink-0" />
+                    <div>
+                      <strong>RBAC Privacy Guard Active:</strong> Clinical Patient ↔ Doctor text
+                      messages contain Protected Health Information (PHI) and are hidden for{' '}
+                      <strong>{role}</strong>. Switch to Physician, Nurse, or Patient view to
+                      message.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-3xl bg-white/70 backdrop-blur-md border border-white/85 p-6 shadow-sm space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200/70">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-bold text-slate-500">Sending As:</span>
+                        {[
+                          { id: 'PATIENT', label: '🙋 Patient / Family' },
+                          { id: 'PHYSICIAN', label: '👩‍⚕️ Doctor (Sarah Chen, MD)' },
+                          { id: 'NURSE', label: '🧑‍⚕️ Charge Nurse (Elena Brooks)' },
+                        ].map((s) => (
+                          <button
+                            key={s.id}
+                            onClick={() => setChatSenderType(s.id as any)}
+                            className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition cursor-pointer ${
+                              chatSenderType === s.id
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-xs font-bold text-rose-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={chatUrgentFlag}
+                            onChange={(e) => setChatUrgentFlag(e.target.checked)}
+                            className="rounded accent-rose-600"
+                          />
+                          🚨 Mark URGENT / STAT
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={chatAskAi}
+                            onChange={(e) => setChatAskAi(e.target.checked)}
+                            className="rounded accent-indigo-600"
+                          />
+                          🤖 AI Triage Auto-Reply
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="max-h-[380px] overflow-y-auto space-y-3 pr-1">
+                      {chatMessages.length === 0 ? (
+                        <div className="rounded-2xl bg-white/80 p-6 text-center text-xs text-slate-500">
+                          No messages yet. Send an urgent symptom alert or ask the doctor a
+                          question below!
+                        </div>
+                      ) : (
+                        chatMessages.map((m) => {
+                          const isDoctorOrNurse =
+                            m.sender_type === 'PHYSICIAN' || m.sender_type === 'NURSE';
+                          const isBot = m.sender_type === 'AI_ASSISTANT';
+                          return (
+                            <div
+                              key={m.id}
+                              className={`flex flex-col ${
+                                isDoctorOrNurse ? 'items-end' : 'items-start'
+                              }`}
+                            >
+                              <div
+                                className={`max-w-[82%] rounded-2xl p-3.5 text-xs shadow-xs border ${
+                                  m.priority === 'URGENT'
+                                    ? 'bg-rose-50 border-rose-300 text-rose-950'
+                                    : isDoctorOrNurse
+                                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-500'
+                                    : isBot
+                                    ? 'bg-indigo-50/90 border-indigo-200 text-indigo-950'
+                                    : 'bg-white border-slate-200 text-slate-800'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3 mb-1">
+                                  <span
+                                    className={`font-extrabold text-[11px] ${
+                                      isDoctorOrNurse && m.priority !== 'URGENT'
+                                        ? 'text-blue-100'
+                                        : 'text-slate-600'
+                                    }`}
+                                  >
+                                    {m.sender_name}
+                                  </span>
+                                  <div className="flex items-center gap-1.5">
+                                    {m.priority === 'URGENT' && (
+                                      <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[9px] font-extrabold text-white">
+                                        🚨 URGENT / STAT
+                                      </span>
+                                    )}
+                                    {m.was_sanitized && (
+                                      <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[9px] font-extrabold text-white">
+                                        🛡️ SANITIZED
+                                      </span>
+                                    )}
+                                    <span
+                                      className={`text-[10px] ${
+                                        isDoctorOrNurse && m.priority !== 'URGENT'
+                                          ? 'text-blue-100'
+                                          : 'text-slate-400'
+                                      }`}
+                                    >
+                                      {m.created_at.slice(11, 19)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="leading-relaxed">{m.message}</div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {chatSanitizedNotice && (
+                      <div className="rounded-xl bg-amber-50 border border-amber-200 p-2.5 text-xs font-bold text-amber-900">
+                        🛡️ {chatSanitizedNotice}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        {
+                          label: '🚨 I have a sudden fever & chills',
+                          sender: 'PATIENT',
+                          urgent: true,
+                        },
+                        {
+                          label: '💊 Is my Apixaban heart pill ready?',
+                          sender: 'PATIENT',
+                          urgent: false,
+                        },
+                        {
+                          label: '👩‍⚕️ Stay in bed — I am coming to examine your fever now.',
+                          sender: 'PHYSICIAN',
+                          urgent: true,
+                        },
+                        {
+                          label: '✅ Your meds & billing cleared — nurse will escort you shortly.',
+                          sender: 'NURSE',
+                          urgent: false,
+                        },
+                      ].map((q) => (
+                        <button
+                          key={q.label}
+                          onClick={() => {
+                            setChatSenderType(q.sender as any);
+                            handleSendChat(q.label, q.urgent);
+                          }}
+                          disabled={chatSending}
+                          className="rounded-xl bg-white hover:bg-blue-50 border border-slate-200 px-3 py-1.5 text-[11px] font-bold text-slate-700 transition cursor-pointer"
+                        >
+                          {q.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex gap-2.5 pt-1">
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !chatSending) handleSendChat();
+                        }}
+                        placeholder={
+                          chatSenderType === 'PATIENT'
+                            ? 'Text your doctor immediately (e.g., symptoms, questions, urgent needs)...'
+                            : 'Reply directly to Patient / Family...'
+                        }
+                        className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-800 focus:border-blue-500 focus:outline-none"
+                      />
+                      <button
+                        onClick={() => handleSendChat()}
+                        disabled={chatSending || !chatInput.trim()}
+                        className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-5 py-3 text-xs font-extrabold text-white shadow-md transition cursor-pointer disabled:opacity-50"
+                      >
+                        <Send className="h-4 w-4" />
+                        Send Now
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ======================================================== ROUND 2 CURVEBALLS TAB (U-3.1 TO U-3.5) */}
             {activeTab === 'curveballs' && (
               <div className="space-y-5">
@@ -2446,6 +2730,122 @@ export function App() {
           </main>
         </div>
       </div>
+
+      {/* ============================================================ FLOATING URGENT CARE CHATBOT WIDGET */}
+      {!chatDrawerOpen && (
+        <button
+          onClick={() => setChatDrawerOpen(true)}
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 rounded-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 px-5 py-3.5 text-xs font-extrabold text-white shadow-2xl shadow-indigo-600/40 hover:scale-105 transition cursor-pointer"
+        >
+          <MessageSquare className="h-4 w-4" />
+          <span>Text Doctor / Patient</span>
+          {chatUrgentCount > 0 && (
+            <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-extrabold">
+              {chatUrgentCount} STAT
+            </span>
+          )}
+        </button>
+      )}
+
+      {chatDrawerOpen && (
+        <div className="fixed bottom-6 right-6 z-50 w-[380px] max-w-[92vw] rounded-3xl bg-white/95 backdrop-blur-xl border border-indigo-200 shadow-2xl overflow-hidden flex flex-col">
+          <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 p-4 text-white flex items-center justify-between">
+            <div>
+              <div className="text-xs font-extrabold flex items-center gap-1.5">
+                <MessageSquare className="h-4 w-4" />
+                Urgent Care Chat · #{patientId}
+              </div>
+              <div className="text-[10px] text-blue-100">
+                Direct Patient ↔ Doctor Immediate Messaging
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setActiveTab('chat');
+                  setChatDrawerOpen(false);
+                }}
+                className="rounded-lg bg-white/20 hover:bg-white/30 px-2 py-1 text-[10px] font-bold cursor-pointer"
+              >
+                Full View
+              </button>
+              <button
+                onClick={() => setChatDrawerOpen(false)}
+                className="rounded-lg bg-white/15 hover:bg-white/25 p-1 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {chatRestricted ? (
+            <div className="p-5 text-xs text-rose-700 font-semibold">
+              🔒 RBAC Active: Clinical chat is hidden for {role}. Switch to Physician, Nurse, or
+              Patient mode.
+            </div>
+          ) : (
+            <div className="p-3.5 space-y-3">
+              <div className="flex gap-1.5">
+                {(['PATIENT', 'PHYSICIAN', 'NURSE'] as const).map((stRole) => (
+                  <button
+                    key={stRole}
+                    onClick={() => setChatSenderType(stRole)}
+                    className={`flex-1 rounded-xl py-1.5 text-[10px] font-extrabold cursor-pointer ${
+                      chatSenderType === stRole
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {stRole === 'PATIENT' ? 'Patient' : stRole === 'PHYSICIAN' ? 'Doctor' : 'Nurse'}
+                  </button>
+                ))}
+              </div>
+
+              <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                {chatMessages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`rounded-2xl p-2.5 text-[11px] border ${
+                      m.priority === 'URGENT'
+                        ? 'bg-rose-50 border-rose-200 text-rose-900'
+                        : m.sender_type === 'PHYSICIAN' || m.sender_type === 'NURSE'
+                        ? 'bg-blue-600 text-white border-blue-500 ml-6'
+                        : m.sender_type === 'AI_ASSISTANT'
+                        ? 'bg-indigo-50 border-indigo-200 text-indigo-950 mr-4'
+                        : 'bg-slate-50 border-slate-200 text-slate-800 mr-6'
+                    }`}
+                  >
+                    <div className="font-bold text-[10px] opacity-80 mb-0.5">
+                      {m.sender_name} {m.priority === 'URGENT' ? '🚨' : ''}
+                    </div>
+                    <div>{m.message}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !chatSending) handleSendChat();
+                  }}
+                  placeholder="Type immediate message..."
+                  className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs focus:outline-none focus:border-blue-500"
+                />
+                <button
+                  onClick={() => handleSendChat()}
+                  disabled={chatSending || !chatInput.trim()}
+                  className="rounded-xl bg-blue-600 hover:bg-blue-500 px-3 py-2 text-white cursor-pointer disabled:opacity-50"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

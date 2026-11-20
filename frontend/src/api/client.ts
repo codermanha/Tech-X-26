@@ -208,6 +208,25 @@ export interface DagNodeInspectorResult {
   rbac_payload_for_role: Record<string, any>;
 }
 
+export interface ChatMessageItem {
+  id: number;
+  patient_id: string;
+  sender_type: string;
+  sender_name: string;
+  message: string;
+  priority: 'NORMAL' | 'URGENT';
+  was_sanitized: boolean;
+  created_at: string;
+}
+
+export interface ChatThreadResponse {
+  patient_id: string;
+  restricted: boolean;
+  urgent_count: number;
+  messages: ChatMessageItem[];
+  message?: string;
+}
+
 export interface ShiftHandoffResult {
   metrics: {
     total_active_discharges: number;
@@ -232,7 +251,10 @@ export interface ShiftHandoffResult {
 }
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || '';
-const DIRECT_BACKEND = 'http://127.0.0.1:8000';
+const IS_LOCAL_HOST =
+  typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const DIRECT_BACKEND = IS_LOCAL_HOST ? 'http://127.0.0.1:8000' : '';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const init: RequestInit = {
@@ -242,9 +264,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, init);
-  } catch {
-    // Fallback directly to IPv4 FastAPI backend if Vite proxy is mid-reload
-    res = await fetch(`${DIRECT_BACKEND}${path}`, init);
+  } catch (err) {
+    if (DIRECT_BACKEND) {
+      res = await fetch(`${DIRECT_BACKEND}${path}`, init);
+    } else {
+      throw err;
+    }
   }
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
@@ -373,6 +398,41 @@ export const api = {
       {
         method: 'POST',
         body: JSON.stringify({ minutes_to_advance: minutesToAdvance }),
+      }
+    ),
+  getChatMessages: (patientId: string, role: RoleId) =>
+    request<ChatThreadResponse>(
+      `/api/patients/${encodeURIComponent(patientId)}/chat?role=${encodeURIComponent(role)}`
+    ),
+  sendChatMessage: (
+    patientId: string,
+    payload: {
+      sender_type: string;
+      message: string;
+      urgent?: boolean;
+      ask_ai_triage?: boolean;
+      role?: RoleId;
+    }
+  ) =>
+    request<{
+      success: boolean;
+      was_sanitized: boolean;
+      flagged_commands: string[];
+      priority: 'NORMAL' | 'URGENT';
+      sent_message: ChatMessageItem;
+      ai_reply: ChatMessageItem | null;
+    }>(
+      `/api/patients/${encodeURIComponent(patientId)}/chat/send?role=${encodeURIComponent(
+        payload.role || 'PHYSICIAN'
+      )}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sender_type: payload.sender_type,
+          message: payload.message,
+          urgent: Boolean(payload.urgent),
+          ask_ai_triage: payload.ask_ai_triage ?? true,
+        }),
       }
     ),
   orchestrate: (patientId: string, simulateTimeoutDept: string | null) =>
