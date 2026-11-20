@@ -1,0 +1,8 @@
+app.py
+tests/
+data/*.sqlite*
+.env
+.vscode/
+__pycache__/
+.pytest_cache/
+frontend/node_modules/

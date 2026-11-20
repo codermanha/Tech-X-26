@@ -30,14 +30,21 @@ ROLE_BANNERS = {
 
 
 def ensure_database_seeded() -> None:
-    """Ensure the SQLite WAL database exists and is populated with seed patients."""
+    """Ensure the SQLite WAL database exists, has the latest schema, and is populated."""
+    needs_reset = False
     try:
         conn = get_db_connection()
         count = conn.execute("SELECT COUNT(*) AS c FROM patients").fetchone()["c"]
+        cols = {
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(escalations)").fetchall()
+        }
         conn.close()
+        if not count or "assigned_owner" not in cols:
+            needs_reset = True
     except Exception:
-        count = 0
-    if not count:
+        needs_reset = True
+    if needs_reset:
         seed_database(reset=True)
 
 
