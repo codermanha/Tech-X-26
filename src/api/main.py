@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.dependencies import ensure_database_seeded
-from src.api.routes import milestones, orchestrator, patients, stretch, system
+from src.api.routes import advanced, milestones, orchestrator, patients, stretch, system
 
 
 @asynccontextmanager
@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(milestones.router)
     app.include_router(orchestrator.router)
     app.include_router(stretch.router)
+    app.include_router(advanced.router)
 
     return app
 

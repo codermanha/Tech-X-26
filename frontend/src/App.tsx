@@ -4,16 +4,21 @@ import {
   type AuditEntry,
   type CollisionTestResult,
   type DAGNodeInfo,
+  type DagNodeInspectorResult,
   type EscalationTicketRecord,
+  type FamilyRideSyncResult,
   type MilestoneReceipt,
   type OrchestrationResponse,
   type PatientListItem,
   type PatientStateResponse,
+  type PredictiveEtaResult,
+  type PromptInjectionResult,
   type RoleId,
+  type ShiftHandoffResult,
   type SystemConfig,
 } from './api/client';
 
-type TabId = 'dag' | 'surge' | 'multi' | 'roi';
+type TabId = 'dag' | 'surge' | 'multi' | 'roi' | 'handoff';
 
 const STATUS_BADGE: Record<string, { bg: string; border: string; text: string; label: string }> = {
   COMPLETED: {
@@ -63,11 +68,29 @@ export function App() {
   // Interactive test / orchestration state
   const [simTimeout, setSimTimeout] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [orchestrating, setOrchestrating] = useState(false);
   const [lastOrchestration, setLastOrchestration] = useState<OrchestrationResponse | null>(null);
   const [guardReceipt, setGuardReceipt] = useState<MilestoneReceipt | null>(null);
   const [collisionResult, setCollisionResult] = useState<CollisionTestResult | null>(null);
+  const [promptInjectionResult, setPromptInjectionResult] = useState<PromptInjectionResult | null>(null);
   const [flashReceipt, setFlashReceipt] = useState<MilestoneReceipt | null>(null);
   const [showRbacJson, setShowRbacJson] = useState(false);
+
+  // 5 New High-Impact Features State
+  const [chaosMenuOpen, setChaosMenuOpen] = useState(false);
+  const [toast, setToast] = useState<{ kind: 'error' | 'success' | 'info'; title: string; body: string } | null>(null);
+  const [simulateResolvedWhatIf, setSimulateResolvedWhatIf] = useState(false);
+  const [etaData, setEtaData] = useState<PredictiveEtaResult | null>(null);
+  const [rideSyncData, setRideSyncData] = useState<FamilyRideSyncResult | null>(null);
+  const [inspectedNode, setInspectedNode] = useState<DagNodeInspectorResult | null>(null);
+  const [handoffBrief, setHandoffBrief] = useState<ShiftHandoffResult | null>(null);
+
+  const showToast = (kind: 'error' | 'success' | 'info', title: string, body: string) => {
+    setToast({ kind, title, body });
+    setTimeout(() => {
+      setToast((prev) => (prev?.title === title && prev?.body === body ? null : prev));
+    }, 6500);
+  };
 
   // Tab 2: ED Surge
   const [surgeData, setSurgeData] = useState<{
@@ -126,21 +149,29 @@ export function App() {
     }
   }, [patientId]);
 
-  const refreshPatientWorkspace = async (pid = patientId, currentRole = role) => {
+  const refreshPatientWorkspace = async (
+    pid = patientId,
+    currentRole = role,
+    whatIf = simulateResolvedWhatIf
+  ) => {
     try {
       setErrorMsg(null);
-      const [st, aud, esc, surge, instr] = await Promise.all([
+      const [st, aud, esc, surge, instr, eta, ride] = await Promise.all([
         api.getPatientState(pid, currentRole),
         api.getAuditLog(pid, currentRole),
         api.getEscalations(pid),
         api.getSurgeOverview(),
         api.getInstructions(pid, targetLang, currentRole),
+        api.getPredictiveEta(pid, whatIf),
+        api.getRideSync(pid),
       ]);
       setStateResp(st);
       setAuditEntries(aud.entries);
       setEscalations(esc.tickets);
       setSurgeData(surge);
       setInstructionData(instr);
+      setEtaData(eta);
+      setRideSyncData(ride);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to load backend data');
     }
@@ -148,9 +179,9 @@ export function App() {
 
   useEffect(() => {
     if (patientId) {
-      refreshPatientWorkspace(patientId, role);
+      refreshPatientWorkspace(patientId, role, simulateResolvedWhatIf);
     }
-  }, [patientId, role, targetLang]);
+  }, [patientId, role, targetLang, simulateResolvedWhatIf]);
 
   useEffect(() => {
     api
@@ -170,8 +201,12 @@ export function App() {
       setLastOrchestration(null);
       setGuardReceipt(null);
       setCollisionResult(null);
+      setPromptInjectionResult(null);
       setFlashReceipt(null);
-      await refreshPatientWorkspace(patientId, role);
+      setInspectedNode(null);
+      setSimulateResolvedWhatIf(false);
+      await refreshPatientWorkspace(patientId, role, false);
+      showToast('info', 'Demo State Reset', 'All 5 synthetic inpatient cases restored to v1.');
     } finally {
       setBusy(false);
     }
@@ -179,10 +214,72 @@ export function App() {
 
   const handleRunOrchestrator = async () => {
     setBusy(true);
+    setOrchestrating(true);
     try {
       const res = await api.orchestrate(patientId, simTimeout ? 'INSURANCE' : null);
       setLastOrchestration(res);
       await refreshPatientWorkspace(patientId, role);
+      showToast(
+        res.tickets.length > 0 ? 'info' : 'success',
+        'Autonomous Orchestrator Complete',
+        res.tickets.length > 0
+          ? `Drafted ${res.tickets.length} specialist escalation packet(s) via ${(res.llm_providers || []).join(', ')}.`
+          : `Parallel Pharmacy & Insurance tracks cleared cleanly (v${res.final_version}).`
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setOrchestrating(false);
+      setBusy(false);
+    }
+  };
+
+  const handleForceHousekeeping = async () => {
+    setChaosMenuOpen(false);
+    setBusy(true);
+    try {
+      const receipt = await api.forcePrematureHousekeeping(patientId);
+      setGuardReceipt(receipt);
+      await refreshPatientWorkspace(patientId, role);
+      showToast(
+        receipt.success ? 'success' : 'error',
+        receipt.error_type || 'Housekeeping Dispatched',
+        receipt.message
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSimulateCollision = async () => {
+    setChaosMenuOpen(false);
+    setBusy(true);
+    try {
+      const res = await api.simulateCollision(patientId);
+      setCollisionResult(res);
+      await refreshPatientWorkspace(patientId, role);
+      showToast(
+        'error',
+        'OptimisticLockConflictError Caught & Serialized',
+        `Race on v${res.start_version}: ${res.winner} committed, ${res.loser} bounced & retried cleanly → v${res.final_version}.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSimulatePromptInjection = async () => {
+    setChaosMenuOpen(false);
+    setBusy(true);
+    try {
+      const res = await api.simulatePromptInjection(patientId);
+      setPromptInjectionResult(res);
+      await refreshPatientWorkspace(patientId, role);
+      showToast(
+        'error',
+        `Prompt Injection Blocked (${res.python_guard_receipt.error_type})`,
+        res.python_guard_receipt.message
+      );
     } catch (err: any) {
       setErrorMsg(err.message);
     } finally {
@@ -190,23 +287,28 @@ export function App() {
     }
   };
 
-  const handleForceHousekeeping = async () => {
-    setBusy(true);
+  const handleInspectNode = async (milestoneId: string) => {
     try {
-      const receipt = await api.forcePrematureHousekeeping(patientId);
-      setGuardReceipt(receipt);
-      await refreshPatientWorkspace(patientId, role);
-    } finally {
-      setBusy(false);
+      const data = await api.inspectDagNode(patientId, milestoneId, role);
+      setInspectedNode(data);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     }
   };
 
-  const handleSimulateCollision = async () => {
+  const handleGenerateHandoff = async () => {
     setBusy(true);
+    setActiveTab('handoff');
     try {
-      const res = await api.simulateCollision(patientId);
-      setCollisionResult(res);
-      await refreshPatientWorkspace(patientId, role);
+      const res = await api.generateShiftHandoff();
+      setHandoffBrief(res);
+      showToast(
+        'success',
+        'Morning Shift Handoff Brief Ready',
+        `Grounded in Python SQLite metrics (${res.metrics.total_active_discharges} active discharges) · drafted by ${res.drafted_by}.`
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
@@ -283,25 +385,46 @@ export function App() {
 
   const renderNodeCard = (mid: string, info?: DAGNodeInfo) => {
     if (!info) return null;
-    const effectiveStatus =
-      info.locked_by_dag && info.status !== 'COMPLETED' ? 'LOCKED' : info.status;
+    const isSpinning =
+      orchestrating && (mid === 'Pharmacy_Ready' || mid === 'Insurance_Cleared');
+    const effectiveStatus = isSpinning
+      ? 'IN_PROGRESS'
+      : info.locked_by_dag && info.status !== 'COMPLETED'
+      ? 'LOCKED'
+      : info.status;
     const style = STATUS_BADGE[effectiveStatus] || STATUS_BADGE.PENDING;
+    const isBlocked = effectiveStatus === 'BLOCKED_EXCEPTION';
+    const isCompleted = effectiveStatus === 'COMPLETED';
+    const isSelected = inspectedNode?.milestone_id === mid;
+
     return (
-      <div
+      <button
+        type="button"
         key={mid}
-        className={`rounded-xl border-2 ${style.border} ${style.bg} px-4 py-3.5 shadow-md transition-all min-w-[195px]`}
+        onClick={() => handleInspectNode(mid)}
+        className={`text-left rounded-xl border-2 ${style.border} ${style.bg} px-4 py-3.5 shadow-md transition-all min-w-[205px] cursor-pointer hover:scale-[1.02] hover:brightness-110 relative ${
+          isBlocked ? 'ring-2 ring-amber-400/70 animate-pulse' : ''
+        } ${isSelected ? 'ring-2 ring-indigo-400' : ''}`}
       >
-        <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-          DAG Node
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            DAG Node
+          </span>
+          {isSpinning && (
+            <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
+          )}
+          {isCompleted && <span className="text-xs text-emerald-400">🔒 Verified</span>}
+          {isBlocked && <span className="text-xs text-amber-300">⚠️ Pulsing</span>}
         </div>
         <div className="mt-1 text-sm font-bold text-white">{mid.replace(/_/g, ' ')}</div>
         <div className={`mt-2 inline-block rounded px-2 py-0.5 text-xs font-bold ${style.text} bg-black/30`}>
-          [{style.label}]
+          [{isSpinning ? 'LLM DRAFTING...' : style.label}]
         </div>
-        {info.updated_by && (
-          <div className="mt-1.5 text-[11px] text-slate-400">By: {info.updated_by}</div>
-        )}
-      </div>
+        <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+          <span>{info.updated_by ? `By: ${info.updated_by}` : 'Awaiting trigger'}</span>
+          <span className="text-indigo-400 font-medium">Inspect ↗</span>
+        </div>
+      </button>
     );
   };
 
@@ -432,11 +555,65 @@ export function App() {
               Code-Enforced DAG · SQLite WAL Optimistic Concurrency · Deterministic RBAC PHI Scrubbing
             </p>
           </div>
-          {busy && (
-            <span className="rounded-full bg-indigo-950 border border-indigo-500/40 px-3 py-1 text-xs font-medium text-indigo-300 animate-pulse">
-              Processing backend transaction...
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {busy && (
+              <span className="rounded-full bg-indigo-950 border border-indigo-500/40 px-3 py-1 text-xs font-medium text-indigo-300 animate-pulse">
+                Processing transaction...
+              </span>
+            )}
+            <button
+              onClick={handleGenerateHandoff}
+              disabled={busy}
+              className="rounded-lg border border-emerald-500/40 bg-emerald-950/60 hover:bg-emerald-900/70 px-3.5 py-2 text-xs font-bold text-emerald-200 transition cursor-pointer disabled:opacity-50"
+            >
+              📋 Generate Shift Handoff Brief
+            </button>
+
+            {/* Feature 1: Chaos Mode / Adversarial Guardrail Stress-Test Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setChaosMenuOpen(!chaosMenuOpen)}
+                disabled={busy}
+                className="rounded-lg border border-red-500/50 bg-red-950/70 hover:bg-red-900/80 px-3.5 py-2 text-xs font-bold text-red-200 transition cursor-pointer flex items-center gap-1.5"
+              >
+                ⚡ Test Safety Guards <span>{chaosMenuOpen ? '▴' : '▾'}</span>
+              </button>
+              {chaosMenuOpen && (
+                <div className="absolute right-0 mt-2 w-72 rounded-xl border border-red-500/40 bg-slate-900 shadow-2xl p-2 space-y-1 z-40">
+                  <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-red-400">
+                    Chaos Mode · Adversarial Stress Tests
+                  </div>
+                  <button
+                    onClick={handleForceHousekeeping}
+                    className="w-full text-left rounded-lg px-2.5 py-2 text-xs hover:bg-slate-800 text-slate-100 cursor-pointer"
+                  >
+                    <div className="font-bold">1. 🧹 Simulate Premature Cleaning</div>
+                    <div className="text-[11px] text-slate-400">
+                      Triggers deterministic DAGDependencyViolationError
+                    </div>
+                  </button>
+                  <button
+                    onClick={handleSimulateCollision}
+                    className="w-full text-left rounded-lg px-2.5 py-2 text-xs hover:bg-slate-800 text-slate-100 cursor-pointer"
+                  >
+                    <div className="font-bold">2. ⚔️ Simulate Race Condition</div>
+                    <div className="text-[11px] text-slate-400">
+                      Two simultaneous writes on vN → OptimisticLockConflictError
+                    </div>
+                  </button>
+                  <button
+                    onClick={handleSimulatePromptInjection}
+                    className="w-full text-left rounded-lg px-2.5 py-2 text-xs hover:bg-slate-800 text-slate-100 cursor-pointer"
+                  >
+                    <div className="font-bold">3. 💉 Simulate Prompt Injection</div>
+                    <div className="text-[11px] text-slate-400">
+                      Injects override into doctor notes → AuthorityBoundaryError
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {errorMsg && (
@@ -484,6 +661,7 @@ export function App() {
             { id: 'surge', label: '🚨 ED-Boarding Surge Ranker' },
             { id: 'multi', label: '🌐 Multilingual Discharge & Nurse Gate' },
             { id: 'roi', label: '📈 Hospital Capacity ROI Simulator' },
+            { id: 'handoff', label: '📋 Morning Shift Handoff Brief' },
           ].map((t) => (
             <button
               key={t.id}
@@ -569,6 +747,121 @@ export function App() {
                     </pre>
                   )}
                 </>
+              )}
+            </div>
+
+            {/* Feature 2 & 3 Row: Predictive Cascade ETA Engine + Family Ride-Sync (Zero-PHI) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Feature 2: Predictive Cascade Bottleneck & Time-to-Bed ETA */}
+              {etaData && (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-bold text-white">
+                        ⏱️ Predictive Cascade Bottleneck & Bed-Ready ETA
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        SLA model: Stockout +95m · Prior-Auth +110m · {etaData.cleaning_protocol_tier} (
+                        +{etaData.active_projection.housekeeping_minutes}m)
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={simulateResolvedWhatIf}
+                        onChange={(e) => setSimulateResolvedWhatIf(e.target.checked)}
+                      />
+                      ⚡ Simulate Resolving Blocker Now
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg bg-slate-950 border border-slate-800 p-3">
+                      <div className="text-[11px] text-slate-400">Housekeeping Dispatch</div>
+                      <div className="mt-0.5 text-base font-bold text-white">
+                        {etaData.active_projection.housekeeping_dispatch_eta}
+                      </div>
+                      {simulateResolvedWhatIf && etaData.minutes_saved_if_resolved_now > 0 && (
+                        <div className="text-[11px] text-emerald-400 font-semibold">
+                          -{etaData.minutes_saved_if_resolved_now} mins earlier
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg bg-slate-950 border border-slate-800 p-3">
+                      <div className="text-[11px] text-slate-400">Predicted Bed-Ready</div>
+                      <div className="mt-0.5 text-base font-bold text-indigo-300">
+                        {etaData.active_projection.predicted_bed_ready_eta}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {etaData.active_projection.total_remaining_minutes} min remaining
+                      </div>
+                    </div>
+                    {etaData.ed_boarder_impact && (
+                      <div className="rounded-lg bg-slate-950 border border-slate-800 p-3">
+                        <div className="text-[11px] text-slate-400">
+                          ED Boarder {etaData.ed_boarder_impact.boarder_id}
+                        </div>
+                        <div className="mt-0.5 text-base font-bold text-amber-300">
+                          {simulateResolvedWhatIf
+                            ? etaData.ed_boarder_impact.projected_total_wait_what_if_hours
+                            : etaData.ed_boarder_impact.projected_total_wait_baseline_hours}
+                          h wait
+                        </div>
+                        {simulateResolvedWhatIf && etaData.ed_boarder_impact.ed_wait_reduction_minutes > 0 ? (
+                          <div className="text-[11px] text-emerald-400 font-semibold">
+                            ↓ {etaData.ed_boarder_impact.ed_wait_reduction_minutes}m ED relief
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-slate-400">
+                            {etaData.ed_boarder_impact.acuity} acuity
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Feature 3: Family Ride-Sync & Zero-PHI SMS Countdown */}
+              {rideSyncData && (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold text-white">
+                      🚗 Family Ride-Sync & SMS Discharge Countdown
+                    </h3>
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                        rideSyncData.ride_status === 'ACTIVE_PICKUP_WINDOW'
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/50 animate-pulse'
+                          : rideSyncData.ride_status === 'PICKUP_COMPLETED'
+                          ? 'bg-sky-950 text-sky-300 border border-sky-500/50'
+                          : 'bg-slate-800 text-slate-300 border border-slate-700'
+                      }`}
+                    >
+                      {rideSyncData.ride_status.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+
+                  <div className="text-xs font-semibold text-indigo-300">{rideSyncData.banner}</div>
+
+                  {/* Sanitized Zero-PHI SMS Bubble */}
+                  <div className="rounded-xl border border-sky-500/30 bg-slate-950 p-3 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-semibold text-sky-300">📱 Outbound Family SMS Preview</span>
+                      <span className="rounded bg-emerald-950 px-2 py-0.5 font-bold text-emerald-300 border border-emerald-500/40">
+                        {rideSyncData.phi_audit.zero_phi_verified
+                          ? '✅ 0 PHI Fields Leaked'
+                          : '⚠️ PHI Alert'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-200 leading-relaxed italic">
+                      &ldquo;{rideSyncData.sanitized_sms}&rdquo;
+                    </p>
+                    <div className="text-[10px] text-slate-500">
+                      RBAC stripped: {rideSyncData.phi_audit.fields_stripped.join(', ')}
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
 
@@ -658,7 +951,39 @@ export function App() {
                     >
                       Simulate Parallel Write Collision
                     </button>
+                    <button
+                      onClick={handleSimulatePromptInjection}
+                      disabled={busy}
+                      className="rounded-lg border border-red-500/40 bg-red-950/60 hover:bg-red-900/70 px-3.5 py-2 text-xs font-semibold text-red-200 transition cursor-pointer"
+                    >
+                      💉 Simulate Prompt Injection in Notes
+                    </button>
                   </div>
+
+                  {promptInjectionResult && (
+                    <div className="rounded-lg border border-red-500/50 bg-slate-950 p-3.5 text-xs space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-red-300">
+                          🛡️ Prompt Injection Repelled by Python Guard
+                        </span>
+                        <span className="rounded bg-red-950 px-2 py-0.5 font-mono text-[10px] text-red-200">
+                          {promptInjectionResult.python_guard_receipt.error_type}
+                        </span>
+                      </div>
+                      <div className="text-slate-400">
+                        <strong>Injected note:</strong>{' '}
+                        <code className="text-amber-300">{promptInjectionResult.injected_text}</code>
+                      </div>
+                      <div className="text-slate-300">
+                        <strong>LLM ({promptInjectionResult.llm_provider}) draft:</strong>{' '}
+                        {promptInjectionResult.llm_output}
+                      </div>
+                      <div className="rounded bg-red-950/50 border border-red-500/40 p-2 text-red-200">
+                        <strong>Deterministic Refusal:</strong>{' '}
+                        {promptInjectionResult.python_guard_receipt.message}
+                      </div>
+                    </div>
+                  )}
 
                   {guardReceipt && (
                     <div
@@ -1148,7 +1473,220 @@ export function App() {
             )}
           </div>
         )}
+
+        {/* ============================================================ TAB 5: SHIFT HANDOFF */}
+        {activeTab === 'handoff' && (
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-white">
+                  📋 Automated &ldquo;Morning Shift Handoff&rdquo; Executive Brief
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Every metric is deterministically computed in Python from SQLite first and passed
+                  to the LLM as read-only context — zero hallucinated numbers.
+                </p>
+              </div>
+              <button
+                onClick={handleGenerateHandoff}
+                disabled={busy}
+                className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-bold text-white transition cursor-pointer disabled:opacity-50"
+              >
+                ✨ Refresh Floor Executive Brief
+              </button>
+            </div>
+
+            {!handoffBrief ? (
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-6 text-center text-sm text-slate-400">
+                Click <strong>Generate Shift Handoff Brief</strong> to synthesize all 5 active
+                discharges into an executive floor report.
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {/* Deterministic Read-Only Python Metrics Strip */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <div className="text-xs text-slate-400">Active Discharges</div>
+                    <div className="mt-1 text-2xl font-bold text-white">
+                      {handoffBrief.metrics.total_active_discharges} beds
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <div className="text-xs text-slate-400">Cumulative Delayed Bed-Hours</div>
+                    <div className="mt-1 text-2xl font-bold text-amber-300">
+                      {handoffBrief.metrics.total_delayed_bed_hours} hrs
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <div className="text-xs text-slate-400">#1 Floor Bottleneck</div>
+                    <div className="mt-1 text-sm font-bold text-red-300">
+                      {handoffBrief.metrics.top_bottleneck.category}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-400">
+                      Beds: {handoffBrief.metrics.top_bottleneck.affected_beds.join(', ') || 'None'}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <div className="text-xs text-slate-400">ED Boarders Waiting</div>
+                    <div className="mt-1 text-2xl font-bold text-indigo-400">
+                      {handoffBrief.metrics.ed_boarders_waiting} ({handoffBrief.metrics.high_acuity_ed_boarders} HIGH)
+                    </div>
+                  </div>
+                </div>
+
+                {/* LLM Executive Synthesis */}
+                <div className="rounded-xl border border-emerald-500/40 bg-slate-950 p-5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+                      Executive Narrative & Operational Recommendation
+                    </span>
+                    <span className="rounded-full bg-emerald-950 border border-emerald-500/40 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300">
+                      ✅ Grounded in Python SQLite Metrics · Drafted by {handoffBrief.drafted_by}
+                    </span>
+                  </div>
+                  <pre className="whitespace-pre-wrap text-sm text-slate-200 leading-relaxed font-sans">
+                    {handoffBrief.brief_text}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </main>
+
+      {/* Feature 4: Click-to-Inspect Slide-Over Time-Travel Audit Diff Drawer */}
+      {inspectedNode && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-xl bg-slate-900 border-l border-slate-700 h-full overflow-y-auto p-6 space-y-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-400">
+                  Time-Travel Audit Diff Inspector
+                </div>
+                <h3 className="text-lg font-bold text-white mt-0.5">
+                  {inspectedNode.milestone_id.replace(/_/g, ' ')}
+                </h3>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  Status: <strong className="text-white">{inspectedNode.node_info.status}</strong> ·
+                  Role View: <strong className="text-indigo-300">{inspectedNode.role}</strong>
+                </div>
+              </div>
+              <button
+                onClick={() => setInspectedNode(null)}
+                className="rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-bold text-white cursor-pointer"
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {/* Section A: State Diff Timeline */}
+            <div className="space-y-2.5">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                1. Immutable State Diff History (vN → vN+1)
+              </h4>
+              {inspectedNode.state_diffs.length === 0 ? (
+                <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+                  No transitions recorded yet for this node. Run the orchestrator or a guard test to
+                  see live state diffs here.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {inspectedNode.state_diffs.map((d) => (
+                    <div
+                      key={d.id}
+                      className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-bold text-indigo-300">
+                          {d.version_transition || 'Event'}
+                        </span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 font-semibold ${
+                            d.outcome === 'APPLIED'
+                              ? 'bg-emerald-950 text-emerald-300'
+                              : 'bg-red-950 text-red-300'
+                          }`}
+                        >
+                          {d.outcome}
+                        </span>
+                      </div>
+                      <div className="text-slate-300">
+                        <strong>{d.actor}</strong> via <code>{d.tool_called}</code>
+                      </div>
+                      {d.message && <div className="text-slate-400">{d.message}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Section B: LLM Escalation Packets */}
+            <div className="space-y-2.5">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                2. LLM Specialist Escalation Packet
+              </h4>
+              {inspectedNode.restricted ? (
+                <div className="rounded-lg border border-red-500/40 bg-red-950/30 p-3 text-xs text-red-200">
+                  🔒 Escalation packets contain PHI and are deterministically stripped for{' '}
+                  <strong>{inspectedNode.role}</strong>.
+                </div>
+              ) : inspectedNode.escalation_packets.length === 0 ? (
+                <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+                  No escalation tickets drafted for this node.
+                </div>
+              ) : (
+                inspectedNode.escalation_packets.map((t) => (
+                  <div
+                    key={t.id}
+                    className="rounded-lg border border-amber-500/40 bg-slate-950 p-3 text-xs space-y-1.5"
+                  >
+                    <div className="font-bold text-amber-300">
+                      Ticket #{t.id} · {t.reason_code} · [{t.status}]
+                    </div>
+                    <pre className="whitespace-pre-wrap text-slate-200 font-sans leading-relaxed">
+                      {t.summary}
+                    </pre>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Section C: Exact RBAC-Filtered Payload */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                3. Exact RBAC-Filtered Payload Sent to {inspectedNode.role}
+              </h4>
+              <pre className="max-h-72 overflow-auto rounded-lg border border-slate-800 bg-slate-950 p-3 text-[11px] text-emerald-300">
+                {JSON.stringify(inspectedNode.rbac_payload_for_role, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed bottom-5 right-5 z-50 max-w-md rounded-xl border p-4 shadow-2xl text-xs space-y-1 ${
+            toast.kind === 'error'
+              ? 'border-red-500/70 bg-red-950/95 text-red-100'
+              : toast.kind === 'success'
+              ? 'border-emerald-500/70 bg-emerald-950/95 text-emerald-100'
+              : 'border-indigo-500/70 bg-slate-900/95 text-slate-100'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-4">
+            <strong className="text-sm">{toast.title}</strong>
+            <button
+              onClick={() => setToast(null)}
+              className="text-slate-300 hover:text-white cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="leading-relaxed opacity-90">{toast.body}</p>
+        </div>
+      )}
     </div>
   );
 }

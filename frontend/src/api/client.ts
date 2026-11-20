@@ -133,6 +133,102 @@ export interface CollisionTestResult {
   no_lost_update: boolean;
 }
 
+export interface PromptInjectionResult {
+  patient_id: string;
+  injected_text: string;
+  llm_provider: string;
+  llm_output: string;
+  attempted_tool_call: string;
+  python_guard_receipt: MilestoneReceipt;
+  guard_held: boolean;
+}
+
+export interface PredictiveEtaPath {
+  pharmacy_minutes: number;
+  insurance_minutes: number;
+  parallel_gate_minutes: number;
+  departure_minutes: number;
+  housekeeping_minutes: number;
+  housekeeping_dispatch_eta: string;
+  predicted_bed_ready_eta: string;
+  total_remaining_minutes: number;
+}
+
+export interface PredictiveEtaResult {
+  patient_id: string;
+  bed_id: string;
+  unit: string;
+  cleaning_protocol_tier: string;
+  simulate_resolved: boolean;
+  has_active_blockers: boolean;
+  active_blocker_nodes: string[];
+  baseline: PredictiveEtaPath;
+  what_if: PredictiveEtaPath;
+  active_projection: PredictiveEtaPath;
+  minutes_saved_if_resolved_now: number;
+  ed_boarder_impact: {
+    boarder_id: string;
+    acuity: string;
+    needs_unit: string;
+    current_wait_hours: number;
+    projected_total_wait_baseline_hours: number;
+    projected_total_wait_what_if_hours: number;
+    ed_wait_reduction_minutes: number;
+  } | null;
+}
+
+export interface FamilyRideSyncResult {
+  patient_id: string;
+  bed_id: string;
+  unit: string;
+  ride_status: 'STANDBY_AWAITING_CLEARANCES' | 'ACTIVE_PICKUP_WINDOW' | 'PICKUP_COMPLETED';
+  banner: string;
+  family_eta_minutes: number;
+  pickup_lobby: string;
+  pickup_time: string;
+  transport_action: string;
+  sanitized_sms: string;
+  phi_audit: {
+    zero_phi_verified: boolean;
+    fields_stripped: string[];
+    leaked_tokens: string[];
+  };
+}
+
+export interface DagNodeInspectorResult {
+  patient_id: string;
+  milestone_id: string;
+  role: RoleId;
+  restricted: boolean;
+  node_info: DAGNodeInfo & { milestone_id: string };
+  state_diffs: AuditEntry[];
+  escalation_packets: EscalationTicketRecord[];
+  rbac_payload_for_role: Record<string, any>;
+}
+
+export interface ShiftHandoffResult {
+  metrics: {
+    total_active_discharges: number;
+    total_delayed_bed_hours: number;
+    ed_boarders_waiting: number;
+    high_acuity_ed_boarders: number;
+    pharmacy_bottleneck_beds: string[];
+    insurance_bottleneck_beds: string[];
+    transport_waiting_beds: string[];
+    top_bottleneck: {
+      category: string;
+      affected_bed_count: number;
+      affected_beds: string[];
+    };
+    top_priority_bed: string | null;
+    top_priority_unit: string | null;
+    top_priority_score: number;
+  };
+  brief_text: string;
+  drafted_by: string;
+  grounded_in_python: boolean;
+}
+
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || '';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -186,6 +282,25 @@ export const api = {
       `/api/patients/${encodeURIComponent(patientId)}/guard-tests/parallel-collision`,
       { method: 'POST' }
     ),
+  simulatePromptInjection: (patientId: string) =>
+    request<PromptInjectionResult>(
+      `/api/patients/${encodeURIComponent(patientId)}/guard-tests/prompt-injection`,
+      { method: 'POST' }
+    ),
+  getPredictiveEta: (patientId: string, simulateResolved: boolean) =>
+    request<PredictiveEtaResult>(
+      `/api/patients/${encodeURIComponent(patientId)}/eta?simulate_resolved=${simulateResolved}`
+    ),
+  getRideSync: (patientId: string) =>
+    request<FamilyRideSyncResult>(`/api/patients/${encodeURIComponent(patientId)}/ride-sync`),
+  inspectDagNode: (patientId: string, milestoneId: string, role: RoleId) =>
+    request<DagNodeInspectorResult>(
+      `/api/patients/${encodeURIComponent(patientId)}/dag-inspector/${encodeURIComponent(
+        milestoneId
+      )}?role=${encodeURIComponent(role)}`
+    ),
+  generateShiftHandoff: () =>
+    request<ShiftHandoffResult>('/api/handoff/brief', { method: 'POST' }),
   orchestrate: (patientId: string, simulateTimeoutDept: string | null) =>
     request<OrchestrationResponse>(`/api/patients/${encodeURIComponent(patientId)}/orchestrate`, {
       method: 'POST',
