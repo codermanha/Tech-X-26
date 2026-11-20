@@ -34,16 +34,21 @@ import {
   type AuditEntry,
   type CollisionTestResult,
   type DAGNodeInfo,
+  type DagNodeInspectorResult,
   type EscalationTicketRecord,
+  type FamilyRideSyncResult,
   type MilestoneReceipt,
   type OrchestrationResponse,
   type PatientListItem,
   type PatientStateResponse,
+  type PredictiveEtaResult,
+  type PromptInjectionResult,
   type RoleId,
+  type ShiftHandoffResult,
   type SystemConfig,
 } from './api/client';
 
-type TabId = 'dag' | 'surge' | 'multi' | 'roi';
+type TabId = 'dag' | 'surge' | 'multi' | 'roi' | 'handoff';
 
 const TEAM_PROFILES: Record<
   RoleId,
@@ -135,14 +140,32 @@ export function App() {
   // Interactive test / orchestration state
   const [simTimeout, setSimTimeout] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [orchestrating, setOrchestrating] = useState(false);
   const [lastOrchestration, setLastOrchestration] = useState<OrchestrationResponse | null>(null);
   const [guardReceipt, setGuardReceipt] = useState<MilestoneReceipt | null>(null);
   const [collisionResult, setCollisionResult] = useState<CollisionTestResult | null>(null);
+  const [promptInjectionResult, setPromptInjectionResult] = useState<PromptInjectionResult | null>(null);
   const [flashReceipt, setFlashReceipt] = useState<MilestoneReceipt | null>(null);
   const [showRbacJson, setShowRbacJson] = useState(false);
   const [autopilotSteps, setAutopilotSteps] = useState<
     Array<{ step: string; role: string; detail: string }>
   >([]);
+
+  // 5 New High-Impact Features State
+  const [chaosMenuOpen, setChaosMenuOpen] = useState(false);
+  const [toast, setToast] = useState<{ kind: 'error' | 'success' | 'info'; title: string; body: string } | null>(null);
+  const [simulateResolvedWhatIf, setSimulateResolvedWhatIf] = useState(false);
+  const [etaData, setEtaData] = useState<PredictiveEtaResult | null>(null);
+  const [rideSyncData, setRideSyncData] = useState<FamilyRideSyncResult | null>(null);
+  const [inspectedNode, setInspectedNode] = useState<DagNodeInspectorResult | null>(null);
+  const [handoffBrief, setHandoffBrief] = useState<ShiftHandoffResult | null>(null);
+
+  const showToast = (kind: 'error' | 'success' | 'info', title: string, body: string) => {
+    setToast({ kind, title, body });
+    setTimeout(() => {
+      setToast((prev) => (prev?.title === title && prev?.body === body ? null : prev));
+    }, 6500);
+  };
 
   // Tab 2: ED Surge
   const [surgeData, setSurgeData] = useState<{
@@ -202,15 +225,21 @@ export function App() {
     }
   }, [patientId]);
 
-  const refreshPatientWorkspace = async (pid = patientId, currentRole = role) => {
+  const refreshPatientWorkspace = async (
+    pid = patientId,
+    currentRole = role,
+    whatIf = simulateResolvedWhatIf
+  ) => {
     try {
       setErrorMsg(null);
-      const [st, aud, esc, surge, instr] = await Promise.all([
+      const [st, aud, esc, surge, instr, eta, ride] = await Promise.all([
         api.getPatientState(pid, currentRole),
         api.getAuditLog(pid, currentRole),
         api.getEscalations(pid, currentRole),
         api.getSurgeOverview(),
         api.getInstructions(pid, targetLang, currentRole),
+        api.getPredictiveEta(pid, whatIf),
+        api.getRideSync(pid),
       ]);
       setStateResp(st);
       setAuditEntries(aud.entries);
@@ -227,9 +256,9 @@ export function App() {
 
   useEffect(() => {
     if (patientId) {
-      refreshPatientWorkspace(patientId, role);
+      refreshPatientWorkspace(patientId, role, simulateResolvedWhatIf);
     }
-  }, [patientId, role, targetLang]);
+  }, [patientId, role, targetLang, simulateResolvedWhatIf]);
 
   useEffect(() => {
     api
@@ -249,6 +278,7 @@ export function App() {
       setLastOrchestration(null);
       setGuardReceipt(null);
       setCollisionResult(null);
+      setPromptInjectionResult(null);
       setFlashReceipt(null);
       setAutopilotSteps([]);
       await refreshPatientWorkspace(patientId, role);
@@ -273,10 +303,72 @@ export function App() {
 
   const handleRunOrchestrator = async () => {
     setBusy(true);
+    setOrchestrating(true);
     try {
       const res = await api.orchestrate(patientId, simTimeout ? 'INSURANCE' : null);
       setLastOrchestration(res);
       await refreshPatientWorkspace(patientId, role);
+      showToast(
+        res.tickets.length > 0 ? 'info' : 'success',
+        'Autonomous Orchestrator Complete',
+        res.tickets.length > 0
+          ? `Drafted ${res.tickets.length} specialist escalation packet(s) via ${(res.llm_providers || []).join(', ')}.`
+          : `Parallel Pharmacy & Insurance tracks cleared cleanly (v${res.final_version}).`
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setOrchestrating(false);
+      setBusy(false);
+    }
+  };
+
+  const handleForceHousekeeping = async () => {
+    setChaosMenuOpen(false);
+    setBusy(true);
+    try {
+      const receipt = await api.forcePrematureHousekeeping(patientId);
+      setGuardReceipt(receipt);
+      await refreshPatientWorkspace(patientId, role);
+      showToast(
+        receipt.success ? 'success' : 'error',
+        receipt.error_type || 'Housekeeping Dispatched',
+        receipt.message
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSimulateCollision = async () => {
+    setChaosMenuOpen(false);
+    setBusy(true);
+    try {
+      const res = await api.simulateCollision(patientId);
+      setCollisionResult(res);
+      await refreshPatientWorkspace(patientId, role);
+      showToast(
+        'error',
+        'OptimisticLockConflictError Caught & Serialized',
+        `Race on v${res.start_version}: ${res.winner} committed, ${res.loser} bounced & retried cleanly → v${res.final_version}.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSimulatePromptInjection = async () => {
+    setChaosMenuOpen(false);
+    setBusy(true);
+    try {
+      const res = await api.simulatePromptInjection(patientId);
+      setPromptInjectionResult(res);
+      await refreshPatientWorkspace(patientId, role);
+      showToast(
+        'error',
+        `Prompt Injection Blocked (${res.python_guard_receipt.error_type})`,
+        res.python_guard_receipt.message
+      );
     } catch (err: any) {
       setErrorMsg(err.message);
     } finally {
@@ -284,23 +376,28 @@ export function App() {
     }
   };
 
-  const handleForceHousekeeping = async () => {
-    setBusy(true);
+  const handleInspectNode = async (milestoneId: string) => {
     try {
-      const receipt = await api.forcePrematureHousekeeping(patientId);
-      setGuardReceipt(receipt);
-      await refreshPatientWorkspace(patientId, role);
-    } finally {
-      setBusy(false);
+      const data = await api.inspectDagNode(patientId, milestoneId, role);
+      setInspectedNode(data);
+    } catch (err: any) {
+      setErrorMsg(err.message);
     }
   };
 
-  const handleSimulateCollision = async () => {
+  const handleGenerateHandoff = async () => {
     setBusy(true);
+    setActiveTab('handoff');
     try {
-      const res = await api.simulateCollision(patientId);
-      setCollisionResult(res);
-      await refreshPatientWorkspace(patientId, role);
+      const res = await api.generateShiftHandoff();
+      setHandoffBrief(res);
+      showToast(
+        'success',
+        'Morning Shift Handoff Brief Ready',
+        `Grounded in Python SQLite metrics (${res.metrics.total_active_discharges} active discharges) · drafted by ${res.drafted_by}.`
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
