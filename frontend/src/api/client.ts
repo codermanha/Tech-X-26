@@ -28,6 +28,7 @@ export interface SystemConfig {
 
 export interface PatientListItem {
   patient_id: string;
+  patient_name?: string | null;
   bed_id: string;
   unit: string;
   clearance_time: string | null;

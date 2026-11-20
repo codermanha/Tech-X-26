@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   Award,
   BarChart3,
   Bell,
@@ -1061,6 +1062,292 @@ export function App() {
             {/* ======================================================== TAB 1: MAIN BENTO DASHBOARD */}
             {activeTab === 'dag' && (
               <>
+                {/* PATIENT IDENTITY BANNER + STEP-BY-STEP VISUAL DISCHARGE PIPELINE */}
+                <div className="rounded-3xl bg-white/75 backdrop-blur-md border border-white p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.14)] space-y-5">
+                  {/* Top: Which Patient Is Being Discharged */}
+                  <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200/70">
+                    <div className="flex items-center gap-3.5">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white text-sm font-extrabold shadow-md">
+                        {restricted
+                          ? 'BED'
+                          : (patientObj.patient_name || 'Elena Rostova')
+                              .split(' ')
+                              .map((n: string) => n[0])
+                              .join('')
+                              .slice(0, 2)
+                              .toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-extrabold uppercase tracking-wider text-blue-600">
+                          {restricted
+                            ? 'Zero-PHI Active Bed (Patient Name Protected)'
+                            : 'Active Patient To Discharge'}
+                        </div>
+                        <div className="text-xl font-extrabold text-slate-900">
+                          {restricted
+                            ? `Bed ${st?.bed_id || '4B-12'} · ${st?.unit || 'Cardiac Telemetry 4B'}`
+                            : `${patientObj.patient_name || 'Elena Rostova'} (Patient #${patientId}) · Bed ${
+                                patientObj.bed_id || '4B-12'
+                              }`}
+                        </div>
+                        {!restricted && (
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            {patientObj.unit} · {patientObj.primary_diagnosis} · Cleared by MD at{' '}
+                            <strong>{patientObj.clearance_time || '09:00'}</strong>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick Patient Switcher Pills */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {(patients.length > 0
+                        ? patients
+                        : [
+                            { patient_id: '402', patient_name: 'Elena Rostova', bed_id: '4B-12' },
+                            { patient_id: '405', patient_name: 'Marcus Vance', bed_id: '3A-04' },
+                            { patient_id: '408', patient_name: 'Maria Chen', bed_id: '5C-08' },
+                            { patient_id: '411', patient_name: 'David Kim', bed_id: '4B-15' },
+                            { patient_id: '415', patient_name: 'Sofia Al-Mansoor', bed_id: '2D-01' },
+                          ]
+                      ).map((p: any) => {
+                        const active = p.patient_id === patientId;
+                        return (
+                          <button
+                            key={p.patient_id}
+                            onClick={() => {
+                              setPatientId(p.patient_id);
+                              setGuardReceipt(null);
+                              setCollisionResult(null);
+                              setPromptInjectionResult(null);
+                              setFlashReceipt(null);
+                              setInspectedNode(null);
+                            }}
+                            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition cursor-pointer border ${
+                              active
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-blue-50'
+                            }`}
+                          >
+                            {restricted
+                              ? `Bed ${p.bed_id}`
+                              : `${p.patient_name || `#${p.patient_id}`} (#${p.patient_id})`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Step-by-Step Visual Discharge Flow: MD -> [Pharmacist + Insurance AT SAME TIME] -> Transportation -> Housekeeping */}
+                  <div>
+                    <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-3">
+                      Live Discharge Order (Step 1 → Step 2 Parallel → Step 3 Transport → Step 4 Housekeeping)
+                    </div>
+
+                    <div className="flex flex-col xl:flex-row items-stretch xl:items-center gap-3">
+                      {/* STEP 1: MD Clinical Clearance */}
+                      <div
+                        className={`rounded-2xl border p-3.5 flex-1 ${
+                          dagNodes.Clinical_Clearance?.status === 'COMPLETED'
+                            ? 'bg-emerald-50/70 border-emerald-300'
+                            : 'bg-rose-50/70 border-rose-300'
+                        }`}
+                      >
+                        <div className="text-[10px] font-extrabold uppercase text-slate-500">
+                          Step 1 · MD Order
+                        </div>
+                        <div className="text-sm font-extrabold text-slate-900 mt-0.5">
+                          Doctor Signs Discharge
+                        </div>
+                        <div className="mt-2">
+                          <span
+                            className={`inline-block rounded-lg px-2 py-0.5 text-[10px] font-extrabold ${
+                              dagNodes.Clinical_Clearance?.status === 'COMPLETED'
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-rose-600 text-white'
+                            }`}
+                          >
+                            {dagNodes.Clinical_Clearance?.status === 'COMPLETED'
+                              ? '✅ Signed by MD'
+                              : dagNodes.Clinical_Clearance?.status || 'PENDING'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <ArrowRight className="hidden xl:block h-5 w-5 text-slate-400 shrink-0" />
+
+                      {/* STEP 2: PARALLEL GATE (Pharmacist + Insurance AT THE SAME TIME) */}
+                      <div className="rounded-2xl border-2 border-dashed border-indigo-400 bg-indigo-50/50 p-3.5 flex-[2] space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700">
+                            ⚡ Step 2 · Happens At The Same Time (Parallel)
+                          </span>
+                          {(role === 'PHYSICIAN' || role === 'NURSE') && (
+                            <button
+                              onClick={handleRunOrchestrator}
+                              disabled={busy}
+                              className="rounded-xl bg-blue-600 hover:bg-blue-500 px-3 py-1 text-[11px] font-extrabold text-white shadow-xs cursor-pointer disabled:opacity-50"
+                            >
+                              ▶ Run Both Together
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {/* 2A: Pharmacist */}
+                          <div
+                            className={`rounded-xl border p-3 bg-white ${
+                              dagNodes.Pharmacy_Ready?.status === 'COMPLETED'
+                                ? 'border-emerald-300'
+                                : dagNodes.Pharmacy_Ready?.status === 'BLOCKED_EXCEPTION'
+                                ? 'border-rose-300'
+                                : 'border-amber-200'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-extrabold text-slate-900">
+                                💊 2A. Pharmacist
+                              </span>
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                  priorityPillStyle(dagNodes.Pharmacy_Ready).bg
+                                }`}
+                              >
+                                {priorityPillStyle(dagNodes.Pharmacy_Ready).label}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-1">
+                              {restricted
+                                ? 'Medication clearance'
+                                : dagNodes.Pharmacy_Ready?.notes || 'Checks & packs meds'}
+                            </div>
+                          </div>
+
+                          {/* 2B: Insurance */}
+                          <div
+                            className={`rounded-xl border p-3 bg-white ${
+                              dagNodes.Insurance_Cleared?.status === 'COMPLETED'
+                                ? 'border-emerald-300'
+                                : dagNodes.Insurance_Cleared?.status === 'BLOCKED_EXCEPTION'
+                                ? 'border-rose-300'
+                                : 'border-amber-200'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-extrabold text-slate-900">
+                                💳 2B. Insurance
+                              </span>
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                  priorityPillStyle(dagNodes.Insurance_Cleared).bg
+                                }`}
+                              >
+                                {priorityPillStyle(dagNodes.Insurance_Cleared).label}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-1">
+                              {restricted
+                                ? 'Billing clearance'
+                                : dagNodes.Insurance_Cleared?.notes || 'Approves billing / auth'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {dagNodes.Social_Work_Clearance && (
+                          <div className="rounded-xl border border-teal-300 bg-white p-2.5 flex items-center justify-between text-xs">
+                            <span className="font-bold text-teal-900">
+                              🤝 2C. Social Work Clearance (&gt;75 Living Alone Policy)
+                            </span>
+                            <span
+                              className={`rounded px-2 py-0.5 text-[10px] font-bold ${
+                                priorityPillStyle(dagNodes.Social_Work_Clearance).bg
+                              }`}
+                            >
+                              {priorityPillStyle(dagNodes.Social_Work_Clearance).label}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <ArrowRight className="hidden xl:block h-5 w-5 text-slate-400 shrink-0" />
+
+                      {/* STEP 3: Patient Transportation */}
+                      <div
+                        className={`rounded-2xl border p-3.5 flex-1 flex flex-col justify-between ${
+                          dagNodes.Patient_Departed?.status === 'COMPLETED'
+                            ? 'bg-emerald-50/70 border-emerald-300'
+                            : dagNodes.Patient_Departed?.locked_by_dag
+                            ? 'bg-slate-100/80 border-slate-200'
+                            : 'bg-blue-50/70 border-blue-300'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-[10px] font-extrabold uppercase text-slate-500">
+                            Step 3 · Transportation
+                          </div>
+                          <div className="text-sm font-extrabold text-slate-900 mt-0.5">
+                            🚐 Patient Leaves Bed
+                          </div>
+                          <div className="text-[11px] text-slate-600 mt-1">
+                            {dagNodes.Patient_Departed?.status === 'COMPLETED'
+                              ? '✅ Patient transported out'
+                              : dagNodes.Patient_Departed?.locked_by_dag
+                              ? '🔒 Locked until Pharmacist & Insurance BOTH finish'
+                              : '🔓 Ready for transport!'}
+                          </div>
+                        </div>
+                        {dagNodes.Patient_Departed?.status !== 'COMPLETED' && (
+                          <button
+                            onClick={() => handleDownstreamAction('Patient_Departed')}
+                            disabled={busy}
+                            className="mt-2.5 w-full rounded-xl bg-blue-600 hover:bg-blue-500 py-1.5 px-2.5 text-[11px] font-extrabold text-white cursor-pointer"
+                          >
+                            Confirm Patient Left
+                          </button>
+                        )}
+                      </div>
+
+                      <ArrowRight className="hidden xl:block h-5 w-5 text-slate-400 shrink-0" />
+
+                      {/* STEP 4: Housekeeping (ONLY AFTER Patient Leaves!) */}
+                      <div
+                        className={`rounded-2xl border p-3.5 flex-1 flex flex-col justify-between ${
+                          dagNodes.Housekeeping_Dispatched?.status === 'COMPLETED'
+                            ? 'bg-emerald-50/70 border-emerald-300'
+                            : dagNodes.Housekeeping_Dispatched?.locked_by_dag
+                            ? 'bg-slate-100/80 border-slate-200'
+                            : 'bg-indigo-50/70 border-indigo-300'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-[10px] font-extrabold uppercase text-slate-500">
+                            Step 4 · Housekeeping
+                          </div>
+                          <div className="text-sm font-extrabold text-slate-900 mt-0.5">
+                            🧹 Clean Empty Bed
+                          </div>
+                          <div className="text-[11px] text-slate-600 mt-1">
+                            {dagNodes.Housekeeping_Dispatched?.status === 'COMPLETED'
+                              ? '✅ Housekeeping dispatched!'
+                              : dagNodes.Housekeeping_Dispatched?.locked_by_dag
+                              ? '🔒 Locked until Patient leaves in Step 3'
+                              : '🔓 Room empty — clean now!'}
+                          </div>
+                        </div>
+                        {dagNodes.Housekeeping_Dispatched?.status !== 'COMPLETED' && (
+                          <button
+                            onClick={() => handleDownstreamAction('Housekeeping_Dispatched')}
+                            disabled={busy}
+                            className="mt-2.5 w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 py-1.5 px-2.5 text-[11px] font-extrabold text-white cursor-pointer"
+                          >
+                            Dispatch Housekeeping
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* MIDDLE ROW: Left Wide "Project Overview / Discharge Telemetry" + Right "Upcoming Deadlines / DAG Milestones" */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
                   {/* Left 2 Columns: Discharge Overview, Dual Spline Chart & Orchestrator Controls */}

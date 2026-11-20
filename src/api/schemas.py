@@ -50,6 +50,7 @@ class SystemResetResponse(BaseModel):
 # ===================================================================== Patient & DAG State DTOs
 class PatientSummaryItem(BaseModel):
     patient_id: str
+    patient_name: Optional[str] = None
     bed_id: str
     unit: str
     clearance_time: Optional[str] = None

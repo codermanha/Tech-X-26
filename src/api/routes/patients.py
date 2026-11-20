@@ -23,7 +23,7 @@ def list_patients(role: str = Query(default="PHYSICIAN", description="Active use
     conn = get_db_connection()
     try:
         rows = conn.execute(
-            "SELECT patient_id, bed_id, unit, clearance_time FROM patients ORDER BY patient_id"
+            "SELECT patient_id, patient_name, bed_id, unit, clearance_time FROM patients ORDER BY patient_id"
         ).fetchall()
     finally:
         conn.close()
@@ -31,6 +31,7 @@ def list_patients(role: str = Query(default="PHYSICIAN", description="Active use
     items = []
     for r in rows:
         pid = r["patient_id"]
+        pname = r["patient_name"]
         bed_id = r["bed_id"]
         unit = r["unit"]
         if restricted:
@@ -38,10 +39,11 @@ def list_patients(role: str = Query(default="PHYSICIAN", description="Active use
             extra = ""
         else:
             extra = "Medically Cleared 09:00, Dual Blocker Case" if pid == "402" else ""
-            label = f"#{pid} · Bed {bed_id}" + (f" — {extra}" if extra else "")
+            label = f"{pname} (#{pid} · Bed {bed_id})"
         items.append(
             {
                 "patient_id": pid,
+                "patient_name": None if restricted else pname,
                 "bed_id": bed_id,
                 "unit": unit,
                 "clearance_time": None if restricted else r["clearance_time"],
