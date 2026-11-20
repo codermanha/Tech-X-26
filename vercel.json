@@ -4,7 +4,7 @@
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/index.py": {
-      "includeFiles": "data/seed_cases.json"
+      "includeFiles": "{src/**,data/seed_cases.json}"
     }
   },
   "rewrites": [
