@@ -1,5 +1,4 @@
 """Vercel Python Serverless Entrypoint exporting the FastAPI `app`."""
-import json
 import sys
 import traceback
 from pathlib import Path
@@ -10,17 +9,14 @@ if ROOT not in sys.path:
 
 try:
     from src.api.main import app  # noqa: E402, F401
-except Exception as exc:  # pragma: no cover - surface startup errors cleanly on Vercel
+except Exception as exc:  # pragma: no cover
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
     _tb = traceback.format_exc()
     _err = f"{type(exc).__name__}: {exc}"
+    app = FastAPI()
 
-    async def app(scope, receive, send):
-        body = json.dumps({"error": _err, "traceback": _tb}).encode("utf-8")
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 500,
-                "headers": [(b"content-type", b"application/json")],
-            }
-        )
-        await send({"type": "http.response.body", "body": body})
+    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    def _startup_error(full_path: str = ""):
+        return JSONResponse(status_code=500, content={"error": _err, "traceback": _tb})

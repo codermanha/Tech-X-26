@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ChatWidget } from './components/ChatWidget';
 import {
   Activity,
   AlertTriangle,
@@ -2446,6 +2447,13 @@ export function App() {
           </main>
         </div>
       </div>
+
+      <ChatWidget
+        patientId={patientId}
+        role={role}
+        restricted={restricted}
+        roleLabel={activeRoleMeta?.label || role}
+      />
     </div>
   );
 }

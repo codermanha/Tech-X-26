@@ -463,4 +463,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  chat: (payload: {
+    message: string;
+    patient_id: string;
+    role: RoleId;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }) =>
+    request<{
+      reply: string;
+      role: RoleId;
+      phi_redacted: boolean;
+      provider: string;
+      patient_id: string;
+    }>('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };

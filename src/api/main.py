@@ -46,8 +46,11 @@ ALLOWED_ORIGINS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting ClearTurn FastAPI backend; verifying SQLite WAL database...")
-    ensure_database_seeded()
-    logger.info("Database verified and ready.")
+    try:
+        ensure_database_seeded()
+        logger.info("Database verified and ready.")
+    except Exception as exc:
+        logger.exception("Database startup seed failed (will retry on request): %s", exc)
     yield
     logger.info("Shutting down ClearTurn FastAPI backend.")
 
