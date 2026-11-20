@@ -1,2 +1,4 @@
-"""Vercel Python Serverless Entrypoint exporting the top-level FastAPI `app`."""
-from src.api.main import app  # noqa: F401
+"""Vercel Python Serverless Entrypoint exporting an explicit top-level FastAPI `app`."""
+from src.api.main import create_app
+
+app = create_app()
