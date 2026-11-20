@@ -133,7 +133,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=500,
             content=_error_payload(
                 "InternalServerError",
-                "An unexpected server error occurred. Please check backend logs.",
+                f"{type(exc).__name__}: {exc}",
             ),
         )
 
