@@ -180,3 +180,17 @@ def test_u3_5_escalation_sla_fast_forward_and_supervisor_resolution():
     assert r_sup.status_code == 200
     assert r_sup.json()["success"] is True
     assert get_discharge_dag_state("402")["milestones"]["Insurance_Cleared"]["status"] == "COMPLETED"
+
+
+def test_run_all_curveballs_together():
+    r_all = client.post("/api/patients/402/curveballs/run-all")
+    assert r_all.status_code == 200
+    body = r_all.json()
+    assert body["success"] is True
+    assert body["all_passed"] is True
+    assert body["u31"]["transport_status"] == "CANCELLED"
+    assert body["u32"]["age_78_policy"]["requires_social_work_clearance"] is True
+    assert body["u32"]["age_50_policy"]["requires_social_work_clearance"] is False
+    assert body["u33"]["safety_verified"] is True
+    assert body["u34"]["transport"]["patient_fields_passed_to_llm"] == []
+    assert body["u35"]["ai_cleared_denial"] is False

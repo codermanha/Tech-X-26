@@ -401,6 +401,11 @@ export const api = {
         body: JSON.stringify({ minutes_to_advance: minutesToAdvance }),
       }
     ),
+  runAllCurveballs: (patientId: string) =>
+    request<Record<string, any>>(
+      `/api/patients/${encodeURIComponent(patientId)}/curveballs/run-all`,
+      { method: 'POST' }
+    ),
   getChatMessages: (patientId: string, role: RoleId) =>
     request<ChatThreadResponse>(
       `/api/patients/${encodeURIComponent(patientId)}/chat?role=${encodeURIComponent(role)}`
