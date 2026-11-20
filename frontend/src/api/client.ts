@@ -302,6 +302,7 @@ const DIRECT_BACKEND = 'http://127.0.0.1:8000';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const init: RequestInit = {
+    cache: 'no-store',
     headers: { 'Content-Type': 'application/json' },
     ...options,
   };
@@ -331,8 +332,8 @@ export const api = {
       `/api/patients/${encodeURIComponent(patientId)}/state?role=${encodeURIComponent(role)}`
     ),
   updatePatient: (patientId: string, payload: PatientUpdatePayload) =>
-    request<PatientUpdateResponse>(`/api/patients/${encodeURIComponent(patientId)}`, {
-      method: 'PATCH',
+    request<PatientUpdateResponse>(`/api/patients/${encodeURIComponent(patientId)}/update`, {
+      method: 'POST',
       body: JSON.stringify(payload),
     }),
   getAuditLog: (patientId: string, role: RoleId) =>

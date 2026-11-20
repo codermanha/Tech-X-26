@@ -173,6 +173,16 @@ def get_patient_audit_log(
     response_model=PatientUpdateResponse,
     summary="Update patient chart or bed metadata with RBAC enforcement and audit logging",
 )
+@router.put(
+    "/{patient_id}",
+    response_model=PatientUpdateResponse,
+    summary="Update patient chart or bed metadata (PUT alias)",
+)
+@router.post(
+    "/{patient_id}/update",
+    response_model=PatientUpdateResponse,
+    summary="Update patient chart or bed metadata (POST alias)",
+)
 def update_patient_record(
     patient_id: str,
     payload: PatientUpdateRequest,
@@ -205,12 +215,12 @@ def update_patient_record(
                     status_code=403,
                     detail=f"RBAC Denied: PHARMACIST cannot modify billing field '{billing_field}'.",
                 )
-    elif role_val == "INSURANCE_SPECIALIST":
+    elif role_val in ("INSURANCE_SPECIALIST", "BILLING_SUPERVISOR"):
         for med_field in ("medications_list", "allergies"):
             if med_field in raw_updates:
                 raise HTTPException(
                     status_code=403,
-                    detail=f"RBAC Denied: INSURANCE_SPECIALIST cannot modify clinical field '{med_field}'.",
+                    detail=f"RBAC Denied: {role_val} cannot modify clinical field '{med_field}'.",
                 )
 
     set_clauses: list[str] = []

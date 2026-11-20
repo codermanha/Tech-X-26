@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Lock, Pencil, RefreshCw, Save, X } from 'lucide-react';
 import { api, type PatientUpdatePayload, type RoleId } from '../api/client';
 
@@ -53,6 +53,20 @@ export function EditPatientModal({
   // Role-visibility flags from fetched payload
   const [canEditMeds, setCanEditMeds] = useState(true);
   const [canEditBilling, setCanEditBilling] = useState(true);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!patientId) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseRef.current();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [patientId]);
 
   useEffect(() => {
     if (!patientId) return;
@@ -82,7 +96,10 @@ export function EditPatientModal({
           setIcd10Codes(Array.isArray(p.icd10_codes) ? p.icd10_codes.join(', ') : '');
           setHandoffNotes(p.clinical_handoff_notes || '');
 
-          const hasMeds = 'medications_list' in p && role !== 'INSURANCE_SPECIALIST';
+          const hasMeds =
+            'medications_list' in p &&
+            role !== 'INSURANCE_SPECIALIST' &&
+            role !== 'BILLING_SUPERVISOR';
           const hasBilling = 'payer_details' in p && role !== 'PHARMACIST';
           setCanEditMeds(hasMeds);
           setCanEditBilling(hasBilling);
@@ -105,16 +122,10 @@ export function EditPatientModal({
     };
 
     loadPatient();
-
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKey);
     return () => {
       cancelled = true;
-      window.removeEventListener('keydown', handleKey);
     };
-  }, [patientId, role, restricted, onClose]);
+  }, [patientId, role, restricted]);
 
   if (!patientId) return null;
 
