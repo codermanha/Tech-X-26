@@ -2,18 +2,22 @@ import { useEffect, useState } from 'react';
 import { ChatWidget } from './components/ChatWidget';
 import { EmergencyChatPanel } from './components/EmergencyChatPanel';
 import { EmergencyChatWidget } from './components/EmergencyChatWidget';
+import { NotificationCenter } from './components/NotificationCenter';
+import { QuickSearchBar } from './components/QuickSearchBar';
 import {
   Activity,
   AlertTriangle,
   Award,
   BarChart3,
-  Bell,
   Car,
+  Check,
   CheckCircle2,
   ClipboardCheck,
   Clock,
+  Copy,
   CreditCard,
   DollarSign,
+  Download,
   ExternalLink,
   FileCheck2,
   FileText,
@@ -26,7 +30,6 @@ import {
   Pill,
   Play,
   RefreshCw,
-  Search,
   Settings,
   ShieldAlert,
   Sparkles,
@@ -273,7 +276,95 @@ export function App() {
   const [chatRestricted, setChatRestricted] = useState(false);
   const [chatUrgentCount, setChatUrgentCount] = useState(0);
 
+  // Interactive card menus, audit filtering, copy/export & batch orchestration UI state
+  const [openMenu, setOpenMenu] = useState<'kpi' | 'dag' | 'audit' | 'team' | null>(null);
+  const [showAllAudit, setShowAllAudit] = useState(false);
+  const [auditFilter, setAuditFilter] = useState<'ALL' | 'APPLIED' | 'BLOCKED'>('ALL');
+  const [showRideAudit, setShowRideAudit] = useState(false);
+  const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
+  const [batchBanner, setBatchBanner] = useState<string | null>(null);
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const closeOnClick = () => setOpenMenu(null);
+    const closeOnKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMenu(null);
+    };
+    window.addEventListener('click', closeOnClick);
+    window.addEventListener('keydown', closeOnKey);
+    return () => {
+      window.removeEventListener('click', closeOnClick);
+      window.removeEventListener('keydown', closeOnKey);
+    };
+  }, [openMenu]);
+
+  const selectPatient = (pid: string, switchToDashboard = false) => {
+    setPatientId(pid);
+    setGuardReceipt(null);
+    setCollisionResult(null);
+    setPromptInjectionResult(null);
+    setFlashReceipt(null);
+    setInspectedNode(null);
+    if (switchToDashboard) {
+      setActiveTab('dag');
+    }
+  };
+
+  const handleCopyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedTarget(key);
+      setTimeout(() => setCopiedTarget((prev) => (prev === key ? null : prev)), 2000);
+    } catch {
+      setErrorMsg('Clipboard access was denied by the browser.');
+    }
+  };
+
+  const handleExportAudit = () => {
+    const blob = new Blob([JSON.stringify(auditEntries, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `clearturn-audit-patient-${patientId}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setOpenMenu(null);
+  };
+
+  const handleDownloadInstructions = () => {
+    const content = editableInstructions || instructionData?.record?.instructions_text || '';
+    if (!content) return;
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `discharge-instructions-${patientId}-${targetLang.toLowerCase()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleOrchestrateAllBeds = async () => {
+    setOpenMenu(null);
+    setBusy(true);
+    try {
+      const res = await api.orchestrateAllBeds();
+      const totalTickets = res.results.reduce((acc, r) => acc + (r.tickets_created || 0), 0);
+      setBatchBanner(
+        `Orchestrated all ${res.processed_count} active beds (${totalTickets} escalation ticket${
+          totalTickets === 1 ? '' : 's'
+        } created).`
+      );
+      await refreshPatientWorkspace(patientId, role);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const refreshPatientWorkspace = async (
     pid = patientId,
@@ -790,12 +881,12 @@ export function App() {
 
               {/* Right Search / Case Bar + Action Pills */}
               <div className="flex flex-wrap items-center gap-2.5">
-                <div className="flex items-center gap-2 rounded-2xl bg-white/65 border border-white/80 px-3.5 py-2 shadow-xs min-w-[220px]">
-                  <Search className="h-4 w-4 text-slate-400 shrink-0" />
-                  <span className="text-xs font-semibold text-slate-700 truncate">
-                    {patientDisplayName}
-                  </span>
-                </div>
+                <QuickSearchBar
+                  patients={patients}
+                  activePatientId={patientId}
+                  activeDisplayName={patientDisplayName}
+                  onSelectPatient={(pid) => selectPatient(pid)}
+                />
 
                 <button
                   onClick={handleRunAutopilot}
@@ -816,17 +907,38 @@ export function App() {
                 </button>
 
                 <button
-                  onClick={() => setShowRbacJson(!showRbacJson)}
-                  title="Inspect RBAC Payload"
-                  className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/75 hover:bg-white border border-white text-slate-700 shadow-xs transition cursor-pointer"
+                  onClick={() => setActiveTab('chat')}
+                  title="Open Emergency Care-Team Chat"
+                  className={`relative flex h-10 w-10 items-center justify-center rounded-2xl border shadow-xs transition cursor-pointer ${
+                    activeTab === 'chat'
+                      ? 'bg-blue-600 border-blue-500 text-white'
+                      : 'bg-white/75 hover:bg-white border-white text-slate-700'
+                  }`}
                 >
                   <MessageSquare className="h-4 w-4" />
+                  {chatUrgentCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-extrabold text-white ring-2 ring-white">
+                      {chatUrgentCount > 9 ? '9+' : chatUrgentCount}
+                    </span>
+                  )}
                 </button>
 
-                <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-white/75 border border-white text-slate-700 shadow-xs">
-                  <Bell className="h-4 w-4" />
-                  <span className="absolute top-2 right-2.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-white" />
-                </div>
+                <NotificationCenter
+                  patientId={patientId}
+                  role={role}
+                  restricted={restricted}
+                  escalations={escalations}
+                  chatMessages={chatMessages}
+                  dagNodes={dagNodes}
+                  auditEntries={auditEntries}
+                  onOpenChat={() => setActiveTab('chat')}
+                  onInspectNode={(mid) => handleInspectNode(mid)}
+                  onOpenDashboard={() => setActiveTab('dag')}
+                  onSwitchRole={(nextRole) => {
+                    setRole(nextRole);
+                    setFlashReceipt(null);
+                  }}
+                />
               </div>
             </div>
 
@@ -924,13 +1036,73 @@ export function App() {
               </div>
             )}
 
+            {/* Batch All-Beds Orchestration Toast */}
+            {batchBanner && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/90 p-3.5 text-xs text-emerald-900 flex items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2 font-bold">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{batchBanner}</span>
+                </div>
+                <button
+                  onClick={() => setBatchBanner(null)}
+                  className="text-xs font-bold text-emerald-700 hover:text-emerald-950 cursor-pointer"
+                >
+                  Dismiss ✕
+                </button>
+              </div>
+            )}
+
             {/* TOP 3 BENTO KPI CARDS (Exact Match to Active Projects | Task Progress | Team Performance) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {/* KPI Card 1: Active Cases & OCC State Version + Mini Bar Chart */}
-              <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex flex-col justify-between">
+              <div className="relative rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex flex-col justify-between">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-bold text-slate-800">Active Bed Cases</span>
-                  <MoreHorizontal className="h-4 w-4 text-slate-400" />
+                  <div className="relative" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      title="Bed case actions"
+                      onClick={() => setOpenMenu(openMenu === 'kpi' ? null : 'kpi')}
+                      className="rounded-lg p-1 text-slate-400 hover:text-slate-700 hover:bg-white/80 transition cursor-pointer"
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </button>
+                    {openMenu === 'kpi' && (
+                      <div className="absolute right-0 mt-1.5 w-52 rounded-2xl bg-white border border-slate-200 shadow-xl py-1.5 z-40 text-xs">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={handleOrchestrateAllBeds}
+                          className="w-full px-3.5 py-2 text-left font-bold text-blue-700 hover:bg-blue-50 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                          Orchestrate All Beds
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTab('surge');
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-3.5 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        >
+                          <FolderKanban className="h-3.5 w-3.5" />
+                          View ED Surge Queue
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            refreshPatientWorkspace(patientId, role);
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-3.5 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Refresh All Cases
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-3 flex items-end justify-between">
                   <div className="flex items-baseline gap-2">
@@ -942,13 +1114,33 @@ export function App() {
                     </span>
                   </div>
                   <div className="flex items-end gap-1.5 h-10">
-                    {[35, 55, 40, 75, 50, 95, 65, 85].map((h, i) => (
-                      <div
-                        key={i}
-                        className={`w-1.5 rounded-full ${
-                          i === 5 ? 'bg-blue-600' : 'bg-blue-400/50'
+                    {(patients.length > 0
+                      ? patients.slice(0, 8).map((p, i) => ({
+                          id: p.patient_id,
+                          label: `Switch to ${p.label}`,
+                          h: p.patient_id === patientId ? 95 : 45 + ((i * 17) % 45),
+                          active: p.patient_id === patientId,
+                        }))
+                      : [35, 55, 40, 75, 50, 95, 65, 85].map((h, i) => ({
+                          id: String(i),
+                          label: 'Bed case activity',
+                          h,
+                          active: i === 5,
+                        }))
+                    ).map((bar) => (
+                      <button
+                        key={bar.id}
+                        type="button"
+                        title={bar.label}
+                        onClick={() => {
+                          if (patients.some((p) => p.patient_id === bar.id)) {
+                            selectPatient(bar.id);
+                          }
+                        }}
+                        className={`w-2 rounded-full transition-all cursor-pointer ${
+                          bar.active ? 'bg-blue-600' : 'bg-blue-400/50 hover:bg-blue-500'
                         }`}
-                        style={{ height: `${h}%` }}
+                        style={{ height: `${bar.h}%` }}
                       />
                     ))}
                   </div>
@@ -956,7 +1148,12 @@ export function App() {
               </div>
 
               {/* KPI Card 2: Task Progress + Multi-Color Rainbow Donut Ring */}
-              <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setActiveTab('dag')}
+                title="View DAG Milestones on Dashboard"
+                className="text-left rounded-3xl bg-white/65 hover:bg-white/80 backdrop-blur-md border border-white/80 p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex items-center justify-between transition cursor-pointer"
+              >
                 <div>
                   <div className="text-sm font-bold text-slate-800">Turnover Progress</div>
                   <div className="mt-3 text-3xl font-extrabold text-slate-900">{progressPct}%</div>
@@ -996,12 +1193,24 @@ export function App() {
                     />
                   </svg>
                 </div>
-              </div>
+              </button>
 
               {/* KPI Card 3: Predicted Bed-Ready ETA / Parallel Efficiency */}
-              <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex flex-col justify-between">
+              <button
+                type="button"
+                onClick={() => setSimulateResolvedWhatIf((prev) => !prev)}
+                title="Click to toggle What-If Blocker Resolution ETA"
+                className="text-left rounded-3xl bg-white/65 hover:bg-white/80 backdrop-blur-md border border-white/80 p-5 shadow-[0_12px_32px_-8px_rgba(59,82,186,0.12)] flex flex-col justify-between transition cursor-pointer"
+              >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-slate-800">Predicted Bed-Ready ETA</span>
+                  <span className="text-sm font-bold text-slate-800">
+                    Predicted Bed-Ready ETA
+                    {simulateResolvedWhatIf && (
+                      <span className="ml-1.5 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700">
+                        What-If
+                      </span>
+                    )}
+                  </span>
                   <Clock className="h-4 w-4 text-blue-600" />
                 </div>
                 <div className="mt-3 flex items-baseline justify-between">
@@ -1014,7 +1223,7 @@ export function App() {
                       : `Cleared ${patientObj.clearance_time || '09:00'}`}
                   </span>
                 </div>
-              </div>
+              </button>
             </div>
 
             {/* ======================================================== TAB 1: MAIN BENTO DASHBOARD */}
@@ -1141,18 +1350,20 @@ export function App() {
                         />
 
                         {[
-                          { x: 45, label: 'Clearance' },
-                          { x: 165, label: 'Pharmacy' },
-                          { x: 295, label: 'Insurance' },
-                          { x: 425, label: 'Departure' },
-                          { x: 535, label: 'EVS Clean' },
+                          { x: 45, label: 'Clearance', mid: 'Clinical_Clearance' },
+                          { x: 165, label: 'Pharmacy', mid: 'Pharmacy_Ready' },
+                          { x: 295, label: 'Insurance', mid: 'Insurance_Cleared' },
+                          { x: 425, label: 'Departure', mid: 'Patient_Departed' },
+                          { x: 535, label: 'EVS Clean', mid: 'Housekeeping_Dispatched' },
                         ].map((pt) => (
                           <text
                             key={pt.label}
                             x={pt.x}
                             y="150"
-                            className="fill-slate-500 text-[10px] font-medium"
+                            onClick={() => handleInspectNode(pt.mid)}
+                            className="fill-slate-500 hover:fill-blue-600 text-[10px] font-semibold cursor-pointer"
                           >
+                            <title>Click to inspect {pt.mid.replace(/_/g, ' ')}</title>
                             {pt.label}
                           </text>
                         ))}
@@ -1345,7 +1556,68 @@ export function App() {
                             Click any node to inspect state diffs
                           </p>
                         </div>
-                        <MoreHorizontal className="h-4 w-4 text-slate-400" />
+                        <div className="relative" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            title="Milestone actions"
+                            onClick={() => setOpenMenu(openMenu === 'dag' ? null : 'dag')}
+                            className="rounded-lg p-1 text-slate-400 hover:text-slate-700 hover:bg-white/80 transition cursor-pointer"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                          {openMenu === 'dag' && (
+                            <div className="absolute right-0 mt-1.5 w-52 rounded-2xl bg-white border border-slate-200 shadow-xl py-1.5 z-40 text-xs">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => {
+                                  setOpenMenu(null);
+                                  handleRunOrchestrator();
+                                }}
+                                className="w-full px-3.5 py-2 text-left font-bold text-blue-700 hover:bg-blue-50 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                              >
+                                <Play className="h-3.5 w-3.5" />
+                                Run Orchestrator
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => {
+                                  setOpenMenu(null);
+                                  handleRunAutopilot();
+                                }}
+                                className="w-full px-3.5 py-2 text-left font-semibold text-indigo-700 hover:bg-indigo-50 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                              >
+                                <Zap className="h-3.5 w-3.5" />
+                                1-Click Auto-Pilot
+                              </button>
+                              {inspectedNode && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setInspectedNode(null);
+                                    setOpenMenu(null);
+                                  }}
+                                  className="w-full px-3.5 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                                >
+                                  Close Node Inspector
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => {
+                                  setOpenMenu(null);
+                                  handleResetDemo();
+                                }}
+                                className="w-full px-3.5 py-2 text-left font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                              >
+                                <Settings className="h-3.5 w-3.5" />
+                                Reset Demo State
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {restricted && st && (
@@ -1494,8 +1766,8 @@ export function App() {
                     )}
 
                     {rideSyncData && (
-                      <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-xs space-y-1.5">
-                        <div className="flex items-center justify-between">
+                      <div className="rounded-3xl bg-white/65 backdrop-blur-md border border-white/80 p-5 shadow-xs space-y-2">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 flex items-center gap-1.5">
                             <Car className="h-4 w-4" />
                             Family Curbside Ride-Sync (Zero-PHI SMS)
@@ -1507,9 +1779,50 @@ export function App() {
                         <div className="text-xs font-semibold text-slate-800">
                           {rideSyncData.pickup_lobby} · Pickup ETA: {rideSyncData.pickup_time}
                         </div>
-                        <div className="text-[11px] text-slate-500 truncate">
+                        <div className="text-[11px] text-slate-500 line-clamp-2">
                           SMS: &ldquo;{rideSyncData.sanitized_sms}&rdquo;
                         </div>
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyText('ride-sms', rideSyncData.sanitized_sms)}
+                            className="inline-flex items-center gap-1 rounded-xl bg-white/90 hover:bg-white border border-slate-200 px-2.5 py-1 text-[11px] font-bold text-slate-700 transition cursor-pointer"
+                          >
+                            {copiedTarget === 'ride-sms' ? (
+                              <>
+                                <Check className="h-3 w-3 text-emerald-600" />
+                                Copied SMS
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-3 w-3 text-blue-600" />
+                                Copy Zero-PHI SMS
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowRideAudit((prev) => !prev)}
+                            className="inline-flex items-center gap-1 rounded-xl bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 text-[11px] font-bold text-indigo-700 transition cursor-pointer"
+                          >
+                            <Lock className="h-3 w-3" />
+                            {showRideAudit ? 'Hide PHI Audit' : 'Inspect PHI Audit'}
+                          </button>
+                        </div>
+                        {showRideAudit && rideSyncData.phi_audit && (
+                          <div className="rounded-2xl bg-slate-900 text-slate-100 p-3 text-[11px] space-y-1">
+                            <div className="font-bold text-emerald-400">
+                              Zero-PHI Verified: {String(rideSyncData.phi_audit.zero_phi_verified)}
+                            </div>
+                            <div className="text-slate-300">
+                              Fields Stripped:{' '}
+                              {(rideSyncData.phi_audit.fields_stripped || []).join(', ') || 'None'}
+                            </div>
+                            <div className="text-slate-400">
+                              Transport Action: {rideSyncData.transport_action}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1576,55 +1889,150 @@ export function App() {
                         </div>
                       )}
 
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-base font-extrabold text-slate-900">
                         Recent Activity (Immutable Audit Trail)
                       </h3>
-                      <MoreHorizontal className="h-4 w-4 text-slate-400" />
+                      <div className="flex items-center gap-1.5">
+                        {(['ALL', 'APPLIED', 'BLOCKED'] as const).map((f) => (
+                          <button
+                            key={f}
+                            type="button"
+                            onClick={() => setAuditFilter(f)}
+                            className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold transition cursor-pointer ${
+                              auditFilter === f
+                                ? 'bg-slate-900 text-white'
+                                : 'bg-white/80 text-slate-600 hover:bg-white'
+                            }`}
+                          >
+                            {f === 'ALL' ? `All (${auditEntries.length})` : f}
+                          </button>
+                        ))}
+                        <div className="relative" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            title="Audit trail options"
+                            onClick={() => setOpenMenu(openMenu === 'audit' ? null : 'audit')}
+                            className="rounded-lg p-1 text-slate-400 hover:text-slate-700 hover:bg-white/80 transition cursor-pointer"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                          {openMenu === 'audit' && (
+                            <div className="absolute right-0 mt-1.5 w-48 rounded-2xl bg-white border border-slate-200 shadow-xl py-1.5 z-40 text-xs">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowAllAudit((prev) => !prev);
+                                  setOpenMenu(null);
+                                }}
+                                className="w-full px-3.5 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                              >
+                                {showAllAudit
+                                  ? 'Show Compact (Top 6)'
+                                  : `Show All Entries (${auditEntries.length})`}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={auditEntries.length === 0}
+                                onClick={handleExportAudit}
+                                className="w-full px-3.5 py-2 text-left font-semibold text-blue-700 hover:bg-blue-50 flex items-center gap-2 cursor-pointer disabled:opacity-40"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Export Audit JSON
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  refreshPatientWorkspace(patientId, role);
+                                  setOpenMenu(null);
+                                }}
+                                className="w-full px-3.5 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                                Refresh Log
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="space-y-2.5">
-                      {auditEntries.length === 0 ? (
-                        <div className="rounded-2xl bg-white/75 border border-white p-4 text-xs text-slate-500">
-                          Click <strong>Run Autonomous Orchestrator</strong> or{' '}
-                          <strong>⚡ Auto-Pilot</strong> to generate live audit trail events.
-                        </div>
-                      ) : (
-                        auditEntries.slice(0, 6).map((row) => (
-                          <div
-                            key={row.id}
-                            className="flex items-center justify-between gap-3 rounded-2xl bg-white/75 border border-white px-4 py-3 shadow-xs"
-                          >
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div
-                                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-extrabold text-white ${
-                                  row.outcome === 'APPLIED'
-                                    ? 'bg-gradient-to-tr from-blue-600 to-indigo-500'
-                                    : 'bg-gradient-to-tr from-rose-500 to-pink-500'
-                                }`}
-                              >
-                                {row.actor.slice(0, 2)}
-                              </div>
-                              <div className="min-w-0">
-                                <div className="text-xs font-extrabold text-slate-800 truncate">
-                                  {row.actor} · {row.milestone_id || row.tool_called}{' '}
-                                  {row.version_transition && (
-                                    <span className="font-mono text-blue-600">
-                                      ({row.version_transition})
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-[11px] text-slate-500 truncate">
-                                  {restricted ? row.outcome : row.message || row.outcome}
-                                </div>
-                              </div>
+                      {(() => {
+                        const filteredAudit = auditEntries.filter((row) => {
+                          if (auditFilter === 'APPLIED') return row.outcome === 'APPLIED';
+                          if (auditFilter === 'BLOCKED') return row.outcome !== 'APPLIED';
+                          return true;
+                        });
+                        const displayedAudit = showAllAudit
+                          ? filteredAudit
+                          : filteredAudit.slice(0, 6);
+
+                        if (displayedAudit.length === 0) {
+                          return (
+                            <div className="rounded-2xl bg-white/75 border border-white p-4 text-xs text-slate-500">
+                              {auditEntries.length === 0 ? (
+                                <>
+                                  Click <strong>Run Autonomous Orchestrator</strong> or{' '}
+                                  <strong>⚡ Auto-Pilot</strong> to generate live audit trail events.
+                                </>
+                              ) : (
+                                <>No audit entries match the &ldquo;{auditFilter}&rdquo; filter.</>
+                              )}
                             </div>
-                            <span className="text-[11px] font-medium text-slate-400 shrink-0">
-                              {row.timestamp.slice(11, 19)}
-                            </span>
-                          </div>
-                        ))
-                      )}
+                          );
+                        }
+
+                        return (
+                          <>
+                            {displayedAudit.map((row) => (
+                              <div
+                                key={row.id}
+                                className="flex items-center justify-between gap-3 rounded-2xl bg-white/75 border border-white px-4 py-3 shadow-xs"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div
+                                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-extrabold text-white ${
+                                      row.outcome === 'APPLIED'
+                                        ? 'bg-gradient-to-tr from-blue-600 to-indigo-500'
+                                        : 'bg-gradient-to-tr from-rose-500 to-pink-500'
+                                    }`}
+                                  >
+                                    {row.actor.slice(0, 2)}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-xs font-extrabold text-slate-800 truncate">
+                                      {row.actor} · {row.milestone_id || row.tool_called}{' '}
+                                      {row.version_transition && (
+                                        <span className="font-mono text-blue-600">
+                                          ({row.version_transition})
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 truncate">
+                                      {restricted ? row.outcome : row.message || row.outcome}
+                                    </div>
+                                  </div>
+                                </div>
+                                <span className="text-[11px] font-medium text-slate-400 shrink-0">
+                                  {row.timestamp.slice(11, 19)}
+                                </span>
+                              </div>
+                            ))}
+                            {filteredAudit.length > 6 && (
+                              <button
+                                type="button"
+                                onClick={() => setShowAllAudit((prev) => !prev)}
+                                className="w-full rounded-xl bg-white/70 hover:bg-white border border-white py-2 text-xs font-bold text-blue-700 transition cursor-pointer"
+                              >
+                                {showAllAudit
+                                  ? 'Show Fewer Audit Entries'
+                                  : `Show All ${filteredAudit.length} Audit Entries`}
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -1639,7 +2047,52 @@ export function App() {
                           Click a staff member to switch role
                         </p>
                       </div>
-                      <MoreHorizontal className="h-4 w-4 text-slate-400" />
+                      <div className="relative" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          title="RBAC options"
+                          onClick={() => setOpenMenu(openMenu === 'team' ? null : 'team')}
+                          className="rounded-lg p-1 text-slate-400 hover:text-slate-700 hover:bg-white/80 transition cursor-pointer"
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </button>
+                        {openMenu === 'team' && (
+                          <div className="absolute right-0 mt-1.5 w-52 rounded-2xl bg-white border border-slate-200 shadow-xl py-1.5 z-40 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowRbacJson((prev) => !prev);
+                                setOpenMenu(null);
+                              }}
+                              className="w-full px-3.5 py-2 text-left font-bold text-blue-700 hover:bg-blue-50 cursor-pointer"
+                            >
+                              {showRbacJson ? 'Hide Live RBAC JSON' : 'Inspect Live RBAC JSON'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRole('TRANSPORT');
+                                setFlashReceipt(null);
+                                setOpenMenu(null);
+                              }}
+                              className="w-full px-3.5 py-2 text-left font-semibold text-rose-700 hover:bg-rose-50 cursor-pointer"
+                            >
+                              Test Zero-PHI (Transport)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRole('PHYSICIAN');
+                                setFlashReceipt(null);
+                                setOpenMenu(null);
+                              }}
+                              className="w-full px-3.5 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                            >
+                              Reset to Physician (Full)
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="space-y-2.5">
@@ -2162,6 +2615,19 @@ export function App() {
                         </span>
                         <span className="text-[10px] font-bold">/100</span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetPid =
+                            surgeData.top_target?.patient_id ||
+                            patients.find((p) => p.bed_id === surgeData.top_target?.bed_id)
+                              ?.patient_id;
+                          if (targetPid) selectPatient(String(targetPid), true);
+                        }}
+                        className="rounded-2xl bg-white text-blue-700 hover:bg-blue-50 px-4 py-2.5 text-xs font-extrabold shadow cursor-pointer transition"
+                      >
+                        Open Case →
+                      </button>
                     </div>
                   </div>
                 )}
@@ -2218,36 +2684,60 @@ export function App() {
                           <th className="py-2 pr-2">Bed</th>
                           <th className="py-2 pr-3">Priority Score</th>
                           <th className="py-2 pr-2">Matched ER Patient</th>
-                          <th className="py-2">Next Action</th>
+                          <th className="py-2 pr-2">Next Action</th>
+                          <th className="py-2 text-right">Case</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200/50">
-                        {(surgeData?.ranked_beds || []).map((r) => (
-                          <tr key={r.bed_id}>
-                            <td className="py-3 pr-2 font-extrabold text-blue-600">
-                              #{r.priority_rank}
-                            </td>
-                            <td className="py-3 pr-2">
-                              <div className="font-bold text-slate-900">{r.bed_id}</div>
-                              <div className="text-[11px] text-slate-500">{r.unit}</div>
-                            </td>
-                            <td className="py-3 pr-3 min-w-[140px]">
-                              <div className="font-extrabold text-slate-900 mb-1">
-                                {r.expedite_priority_score} / 100
-                              </div>
-                              <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden flex">
-                                <div
-                                  className="bg-gradient-to-r from-blue-600 to-indigo-600"
-                                  style={{ width: `${r.expedite_priority_score}%` }}
-                                />
-                              </div>
-                            </td>
-                            <td className="py-3 pr-2 text-slate-600">{r.matched_ed_boarder}</td>
-                            <td className="py-3 font-bold text-indigo-700">
-                              {r.recommended_action}
-                            </td>
-                          </tr>
-                        ))}
+                        {(surgeData?.ranked_beds || []).map((r) => {
+                          const rowPid =
+                            r.patient_id ||
+                            patients.find((p) => p.bed_id === r.bed_id)?.patient_id;
+                          return (
+                            <tr
+                              key={r.bed_id}
+                              onClick={() => {
+                                if (rowPid) selectPatient(String(rowPid), true);
+                              }}
+                              className="hover:bg-white/70 transition cursor-pointer"
+                            >
+                              <td className="py-3 pr-2 font-extrabold text-blue-600">
+                                #{r.priority_rank}
+                              </td>
+                              <td className="py-3 pr-2">
+                                <div className="font-bold text-slate-900">{r.bed_id}</div>
+                                <div className="text-[11px] text-slate-500">{r.unit}</div>
+                              </td>
+                              <td className="py-3 pr-3 min-w-[140px]">
+                                <div className="font-extrabold text-slate-900 mb-1">
+                                  {r.expedite_priority_score} / 100
+                                </div>
+                                <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden flex">
+                                  <div
+                                    className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                                    style={{ width: `${r.expedite_priority_score}%` }}
+                                  />
+                                </div>
+                              </td>
+                              <td className="py-3 pr-2 text-slate-600">{r.matched_ed_boarder}</td>
+                              <td className="py-3 pr-2 font-bold text-indigo-700">
+                                {r.recommended_action}
+                              </td>
+                              <td className="py-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (rowPid) selectPatient(String(rowPid), true);
+                                  }}
+                                  className="rounded-xl bg-blue-50 hover:bg-blue-100 px-2.5 py-1 text-[11px] font-bold text-blue-700 cursor-pointer"
+                                >
+                                  Open →
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -2293,14 +2783,52 @@ export function App() {
                         ))}
                       </div>
 
-                      <button
-                        onClick={handleGenerateInstructions}
-                        disabled={busy}
-                        className="inline-flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-extrabold text-white shadow-sm transition cursor-pointer"
-                      >
-                        <FileText className="h-4 w-4" />
-                        Generate {targetLang} Packet
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {instructionData?.record && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleCopyText(
+                                  'discharge-packet',
+                                  editableInstructions ||
+                                    instructionData.record?.instructions_text ||
+                                    ''
+                                )
+                              }
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition cursor-pointer"
+                            >
+                              {copiedTarget === 'discharge-packet' ? (
+                                <>
+                                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                                  Copied
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3.5 w-3.5 text-blue-600" />
+                                  Copy
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDownloadInstructions}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition cursor-pointer"
+                            >
+                              <Download className="h-3.5 w-3.5 text-indigo-600" />
+                              Download .txt
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={handleGenerateInstructions}
+                          disabled={busy}
+                          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-extrabold text-white shadow-sm transition cursor-pointer"
+                        >
+                          <FileText className="h-4 w-4" />
+                          Generate {targetLang} Packet
+                        </button>
+                      </div>
                     </div>
 
                     {!instructionData?.record ? (
