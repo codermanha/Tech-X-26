@@ -1,10 +1,13 @@
 """SQLite (WAL) connection manager, schema, and append-only audit logging."""
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
 from src import config
+
+logger = logging.getLogger("clearturn.db")
 
 SCHEMA = """
 CREATE TABLE patients (
@@ -44,6 +47,17 @@ CREATE TABLE escalations (
 CREATE TABLE ed_boarding_queue (
     boarder_id TEXT PRIMARY KEY, acuity TEXT, needs_unit TEXT, waiting_hours REAL
 );
+CREATE TABLE discharge_instructions (
+    patient_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    instructions_text TEXT NOT NULL,
+    drafted_by TEXT NOT NULL,
+    nurse_signed_off INTEGER NOT NULL DEFAULT 0,
+    signed_off_by TEXT,
+    signed_off_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (patient_id, language)
+);
 CREATE TABLE audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,
@@ -61,7 +75,15 @@ CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
 BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 """
 
-TABLES = ["audit_log", "ed_boarding_queue", "escalations", "subsystem_mocks", "dag_milestones", "patients"]
+TABLES = [
+    "audit_log",
+    "discharge_instructions",
+    "ed_boarding_queue",
+    "escalations",
+    "subsystem_mocks",
+    "dag_milestones",
+    "patients",
+]
 
 
 def utc_now() -> str:
@@ -69,19 +91,21 @@ def utc_now() -> str:
 
 
 def get_db_connection() -> sqlite3.Connection:
-    """New WAL connection. Autocommit mode; callers use explicit BEGIN IMMEDIATE."""
+    """New thread-safe WAL connection. Autocommit mode; callers use explicit BEGIN IMMEDIATE."""
     path = config.get_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=15, isolation_level=None)
+    conn = sqlite3.connect(path, timeout=15, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
 
 @contextmanager
 def transaction():
-    """Atomic write transaction (BEGIN IMMEDIATE serializes writers)."""
+    """Atomic write transaction (BEGIN IMMEDIATE serializes concurrent writers cleanly)."""
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -106,6 +130,7 @@ def init_db(reset: bool = False) -> None:
         for t in TABLES:  # dropping a table also drops its triggers
             conn.execute(f"DROP TABLE IF EXISTS {t}")
         conn.executescript(SCHEMA)
+        logger.info("Initialized SQLite WAL schema at %s (reset=%s)", config.get_db_path(), reset)
     finally:
         conn.close()
 
@@ -122,7 +147,7 @@ def log_audit_event(
     new_version: Optional[int] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> None:
-    """Append an audit row. Uses `conn` (inside a txn) or its own connection."""
+    """Append an immutable audit row. Uses `conn` (inside a txn) or its own connection."""
     own = conn is None
     if own:
         conn = get_db_connection()
@@ -131,8 +156,18 @@ def log_audit_event(
             """INSERT INTO audit_log (timestamp, patient_id, actor, tool_called, milestone_id,
                requested_status, expected_version, new_version, outcome, message)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (utc_now(), patient_id, actor, tool_called, milestone_id, requested_status,
-             expected_version, new_version, outcome, message),
+            (
+                utc_now(),
+                str(patient_id),
+                actor,
+                tool_called,
+                milestone_id,
+                requested_status,
+                expected_version,
+                new_version,
+                outcome,
+                message,
+            ),
         )
     finally:
         if own:

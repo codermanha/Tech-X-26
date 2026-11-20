@@ -2,14 +2,19 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from src.api.dependencies import ensure_database_seeded, is_restricted_role, validate_role
+from src.api.schemas import AuditLogResponse, PatientListResponse, PatientStateEnvelope
 from src.database.db import get_db_connection
 from src.services.hospital_tools import get_discharge_dag_state
 
 router = APIRouter(prefix="/api/patients", tags=["Patients & DAG State"])
 
 
-@router.get("")
-def list_patients(role: str = Query(default="PHYSICIAN", description="Active user role")) -> dict:
+@router.get(
+    "",
+    response_model=PatientListResponse,
+    summary="List all inpatient cases with role-scoped labels",
+)
+def list_patients(role: str = Query(default="PHYSICIAN", description="Active user role")) -> PatientListResponse:
     """List all inpatient cases with role-appropriate labels (PHI stripped for Transport/Housekeeping)."""
     ensure_database_seeded()
     role_val = validate_role(role)
@@ -45,14 +50,18 @@ def list_patients(role: str = Query(default="PHYSICIAN", description="Active use
                 "restricted": restricted,
             }
         )
-    return {"role": role_val, "restricted": restricted, "patients": items}
+    return PatientListResponse(role=role_val, restricted=restricted, patients=items)
 
 
-@router.get("/{patient_id}/state")
+@router.get(
+    "/{patient_id}/state",
+    response_model=PatientStateEnvelope,
+    summary="Get RBAC-filtered patient DAG state and visualization node locks",
+)
 def get_patient_dag_state(
     patient_id: str,
     role: str = Query(default="PHYSICIAN", description="Requester role for RBAC filtering"),
-) -> dict:
+) -> PatientStateEnvelope:
     """Return the RBAC-filtered patient DAG state, plus DAG node lock metadata for visualization."""
     ensure_database_seeded()
     role_val = validate_role(role)
@@ -81,17 +90,18 @@ def get_patient_dag_state(
             "notes": "" if restricted else mdata["notes"],
         }
 
-    return {
-        "state": role_state,
-        "dag_nodes": dag_nodes,
-    }
+    return PatientStateEnvelope(state=role_state, dag_nodes=dag_nodes)
 
 
-@router.get("/{patient_id}/audit")
+@router.get(
+    "/{patient_id}/audit",
+    response_model=AuditLogResponse,
+    summary="Get append-only audit trail for a patient (PHI messages redacted for restricted roles)",
+)
 def get_patient_audit_log(
     patient_id: str,
     role: str = Query(default="PHYSICIAN", description="Requester role for PHI filtering"),
-) -> dict:
+) -> AuditLogResponse:
     """Return the immutable append-only audit trail for a patient."""
     ensure_database_seeded()
     role_val = validate_role(role)
@@ -99,6 +109,12 @@ def get_patient_audit_log(
 
     conn = get_db_connection()
     try:
+        exists = conn.execute(
+            "SELECT 1 FROM patients WHERE patient_id = ?", (str(patient_id),)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"Unknown patient '{patient_id}'")
+
         rows = conn.execute(
             """SELECT id, timestamp, actor, tool_called, milestone_id, requested_status,
                       expected_version, new_version, outcome, message
@@ -134,4 +150,8 @@ def get_patient_audit_log(
                 "message": None if restricted else r["message"],
             }
         )
-    return {"patient_id": str(patient_id), "restricted": restricted, "entries": entries}
+    return AuditLogResponse(
+        patient_id="REDACTED" if restricted else str(patient_id),
+        restricted=restricted,
+        entries=entries,
+    )

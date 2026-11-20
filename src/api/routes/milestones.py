@@ -2,7 +2,11 @@
 from fastapi import APIRouter, HTTPException
 
 from src.api.dependencies import ensure_database_seeded, validate_role
-from src.api.schemas import MilestoneUpdateRequest
+from src.api.schemas import (
+    CollisionTestResponse,
+    MilestoneReceiptResponse,
+    MilestoneUpdateRequest,
+)
 from src.services.hospital_tools import (
     get_discharge_dag_state,
     simulate_parallel_collision_test,
@@ -12,8 +16,15 @@ from src.services.hospital_tools import (
 router = APIRouter(prefix="/api/patients", tags=["DAG Milestones & Concurrency Guards"])
 
 
-@router.post("/{patient_id}/milestones")
-def update_patient_milestone(patient_id: str, payload: MilestoneUpdateRequest) -> dict:
+@router.post(
+    "/{patient_id}/milestones",
+    response_model=MilestoneReceiptResponse,
+    summary="Execute a deterministically guarded DAG milestone update",
+)
+def update_patient_milestone(
+    patient_id: str,
+    payload: MilestoneUpdateRequest,
+) -> MilestoneReceiptResponse:
     """Execute a deterministically guarded DAG milestone update (with optimistic lock compare-and-swap)."""
     ensure_database_seeded()
     role_val = validate_role(payload.actor_role)
@@ -34,18 +45,22 @@ def update_patient_milestone(patient_id: str, payload: MilestoneUpdateRequest) -
         is_ai_agent=payload.is_ai_agent,
         resolution_notes=payload.resolution_notes,
     )
-    return receipt
+    return MilestoneReceiptResponse(**receipt)
 
 
-@router.post("/{patient_id}/guard-tests/premature-housekeeping")
-def force_premature_housekeeping(patient_id: str) -> dict:
-    """Judge Proof #1: Attempt to dispatch Housekeeping prematurely to verify DAGDependencyViolationError."""
+@router.post(
+    "/{patient_id}/guard-tests/premature-housekeeping",
+    response_model=MilestoneReceiptResponse,
+    summary="Judge Proof #1: Force premature Housekeeping dispatch (DAGDependencyViolationError)",
+)
+def force_premature_housekeeping(patient_id: str) -> MilestoneReceiptResponse:
+    """Attempt to dispatch Housekeeping prematurely to verify deterministic DAGDependencyViolationError."""
     ensure_database_seeded()
     current_state = get_discharge_dag_state(patient_id, "PHYSICIAN")
     if "error" in current_state:
         raise HTTPException(status_code=404, detail=current_state["error"])
 
-    return update_department_milestone(
+    receipt = update_department_milestone(
         patient_id=patient_id,
         milestone_id="Housekeeping_Dispatched",
         new_status="IN_PROGRESS",
@@ -54,13 +69,18 @@ def force_premature_housekeeping(patient_id: str) -> dict:
         is_ai_agent=False,
         resolution_notes="Judge proof premature housekeeping test",
     )
+    return MilestoneReceiptResponse(**receipt)
 
 
-@router.post("/{patient_id}/guard-tests/parallel-collision")
-def run_parallel_collision_test(patient_id: str) -> dict:
-    """Judge Proof #2: Fire 2 concurrent threads on the same state_version to verify OptimisticLockConflictError."""
+@router.post(
+    "/{patient_id}/guard-tests/parallel-collision",
+    response_model=CollisionTestResponse,
+    summary="Judge Proof #2: Simulate concurrent thread write race (OptimisticLockConflictError)",
+)
+def run_parallel_collision_test(patient_id: str) -> CollisionTestResponse:
+    """Fire 2 concurrent threads on the same state_version to verify OptimisticLockConflictError."""
     ensure_database_seeded()
     result = simulate_parallel_collision_test(patient_id)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
-    return result
+    return CollisionTestResponse(**result)
