@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.dependencies import ensure_database_seeded
-from src.api.routes import advanced, milestones, orchestrator, patients, stretch, system
+from src.api.routes import advanced, curveballs, milestones, orchestrator, patients, stretch, system
 from src.core.dag_engine import (
     AuthorityBoundaryError,
     DAGDependencyViolationError,
@@ -167,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(orchestrator.router)
     app.include_router(stretch.router)
     app.include_router(advanced.router)
+    app.include_router(curveballs.router)
 
     dist_dir = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
     assets_dir = dist_dir / "assets"

@@ -13,6 +13,9 @@ SCHEMA = """
 CREATE TABLE patients (
     patient_id TEXT PRIMARY KEY,
     patient_name TEXT, mrn TEXT, dob TEXT,
+    age INTEGER,
+    lives_alone INTEGER NOT NULL DEFAULT 0,
+    transport_status TEXT NOT NULL DEFAULT 'NONE',
     bed_id TEXT NOT NULL, unit TEXT NOT NULL,
     primary_diagnosis TEXT, icd10_codes TEXT,
     clinical_handoff_notes TEXT, medications_list TEXT,
@@ -40,8 +43,13 @@ CREATE TABLE subsystem_mocks (
 CREATE TABLE escalations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_id TEXT NOT NULL, milestone_id TEXT NOT NULL,
-    assigned_role TEXT NOT NULL, reason_code TEXT, summary TEXT,
+    assigned_role TEXT NOT NULL,
+    assigned_owner TEXT NOT NULL DEFAULT '',
+    reason_code TEXT, summary TEXT,
     status TEXT NOT NULL DEFAULT 'OPEN',
+    sla_minutes INTEGER NOT NULL DEFAULT 30,
+    elapsed_minutes INTEGER NOT NULL DEFAULT 0,
+    escalated_to_supervisor INTEGER NOT NULL DEFAULT 0,
     created_at TEXT, resolved_at TEXT
 );
 CREATE TABLE ed_boarding_queue (

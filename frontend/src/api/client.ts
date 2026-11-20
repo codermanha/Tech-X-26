@@ -2,6 +2,8 @@ export type RoleId =
   | 'PHYSICIAN'
   | 'PHARMACIST'
   | 'INSURANCE_SPECIALIST'
+  | 'BILLING_SUPERVISOR'
+  | 'SOCIAL_WORKER'
   | 'NURSE'
   | 'TRANSPORT'
   | 'HOUSEKEEPING';
@@ -309,6 +311,70 @@ export const api = {
     ),
   generateShiftHandoff: () =>
     request<ShiftHandoffResult>('/api/handoff/brief', { method: 'POST' }),
+  bookTransport: (patientId: string, actorRole: string = 'TRANSPORT', transportNote?: string) =>
+    request<Record<string, any>>(
+      `/api/patients/${encodeURIComponent(patientId)}/curveballs/book-transport`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          actor_role: actorRole,
+          transport_note: transportNote || 'Wheelchair transport booked for 13:15 pickup',
+        }),
+      }
+    ),
+  revokeClearance: (patientId: string, reason: string, actorRole: string = 'PHYSICIAN') =>
+    request<Record<string, any>>(
+      `/api/patients/${encodeURIComponent(patientId)}/curveballs/revoke-clearance`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          milestone_id: 'Clinical_Clearance',
+          actor_role: actorRole,
+          reason,
+        }),
+      }
+    ),
+  configureSocialWorkPolicy: (
+    patientId: string,
+    age: number,
+    livesAlone: boolean,
+    prepareReady: boolean = true
+  ) =>
+    request<Record<string, any>>(
+      `/api/patients/${encodeURIComponent(patientId)}/curveballs/social-work-policy`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          age,
+          lives_alone: livesAlone,
+          prepare_ready_for_departure: prepareReady,
+        }),
+      }
+    ),
+  testHandoffInjection: (patientId: string, injectedNote: string) =>
+    request<Record<string, any>>(
+      `/api/patients/${encodeURIComponent(patientId)}/curveballs/handoff-injection`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ injected_note: injectedNote }),
+      }
+    ),
+  askWhyDelayed: (patientId: string, requesterRole: string, question: string) =>
+    request<Record<string, any>>(
+      `/api/patients/${encodeURIComponent(patientId)}/curveballs/ask-delay`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ requester_role: requesterRole, question }),
+      }
+    ),
+  fastForwardSlaClock: (patientId: string, minutesToAdvance: number = 30) =>
+    request<Record<string, any>>(
+      `/api/patients/${encodeURIComponent(patientId)}/curveballs/fast-forward-sla`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ minutes_to_advance: minutesToAdvance }),
+      }
+    ),
   orchestrate: (patientId: string, simulateTimeoutDept: string | null) =>
     request<OrchestrationResponse>(`/api/patients/${encodeURIComponent(patientId)}/orchestrate`, {
       method: 'POST',

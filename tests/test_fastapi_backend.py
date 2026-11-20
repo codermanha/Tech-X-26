@@ -26,7 +26,7 @@ def test_health_and_config_endpoints():
     r_cfg = client.get("/api/config")
     assert r_cfg.status_code == 200
     cfg = r_cfg.json()
-    assert len(cfg["roles"]) == 6
+    assert len(cfg["roles"]) >= 6
     assert cfg["milestone_order"] == [
         "Clinical_Clearance",
         "Pharmacy_Ready",

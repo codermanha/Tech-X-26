@@ -6,10 +6,21 @@ from src.database.db import get_db_connection, init_db, log_audit_event, utc_now
 
 JSON_COLS = ["icd10_codes", "medications_list", "allergies", "labs"]
 PATIENT_COLS = [
-    "patient_id", "patient_name", "mrn", "dob", "bed_id", "unit", "primary_diagnosis",
+    "patient_id", "patient_name", "mrn", "dob", "age", "lives_alone", "transport_status",
+    "bed_id", "unit", "primary_diagnosis",
     "icd10_codes", "clinical_handoff_notes", "medications_list", "allergies", "labs",
     "insurance_claim_code", "payer_details", "cleaning_protocol_tier", "clearance_time",
 ]
+
+
+def _compute_age_from_dob(dob: str | None) -> int:
+    if not dob:
+        return 60
+    try:
+        birth_year = int(str(dob).split("-")[0])
+        return 2026 - birth_year
+    except Exception:
+        return 60
 
 
 def seed_database(reset: bool = True) -> int:
@@ -19,7 +30,13 @@ def seed_database(reset: bool = True) -> int:
     try:
         conn.execute("BEGIN IMMEDIATE")
         for p in data["patients"]:
-            row = {c: (json.dumps(p[c]) if c in JSON_COLS else p[c]) for c in PATIENT_COLS}
+            p_copy = dict(p)
+            if "age" not in p_copy or p_copy["age"] is None:
+                p_copy["age"] = _compute_age_from_dob(p_copy.get("dob"))
+            p_copy.setdefault("lives_alone", 0)
+            p_copy.setdefault("transport_status", "NONE")
+
+            row = {c: (json.dumps(p_copy[c]) if c in JSON_COLS else p_copy[c]) for c in PATIENT_COLS}
             conn.execute(
                 f"INSERT OR REPLACE INTO patients ({','.join(PATIENT_COLS)}, version) "
                 f"VALUES ({','.join('?' * len(PATIENT_COLS))}, 1)",

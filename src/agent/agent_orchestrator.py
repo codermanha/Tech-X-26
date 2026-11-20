@@ -104,8 +104,14 @@ def _fallback_insurance(blocker: dict, view: dict, code: str) -> str:
 
 
 # -------------------------------------------------------------- escalations
+_DEFAULT_OWNERS = {
+    "PHARMACIST": "Nathan Vance, PharmD (PHARMACIST)",
+    "INSURANCE_SPECIALIST": "Marcus Cole (INSURANCE_SPECIALIST)",
+}
+
+
 def _create_escalation(pid: str, milestone: str, role: str, code: str, summary: str,
-                       provider: str) -> dict:
+                       provider: str, sla_minutes: int = 30) -> dict:
     conn = get_db_connection()
     try:
         existing = conn.execute(
@@ -113,12 +119,14 @@ def _create_escalation(pid: str, milestone: str, role: str, code: str, summary: 
             (pid, milestone)).fetchone()
         if existing:
             return {"id": existing["id"], "created": False}
+        owner = _DEFAULT_OWNERS.get(role, role)
         cur = conn.execute(
-            "INSERT INTO escalations (patient_id, milestone_id, assigned_role, reason_code, summary, "
-            "status, created_at) VALUES (?,?,?,?,?, 'OPEN', ?)",
-            (pid, milestone, role, code, summary, utc_now()))
+            "INSERT INTO escalations (patient_id, milestone_id, assigned_role, assigned_owner, "
+            "reason_code, summary, status, sla_minutes, elapsed_minutes, escalated_to_supervisor, created_at) "
+            "VALUES (?,?,?,?,?,?, 'OPEN', ?, 0, 0, ?)",
+            (pid, milestone, role, owner, code, summary, sla_minutes, utc_now()))
         log_audit_event(pid, "AI_AGENT", "create_escalation", "APPLIED",
-                        f"{milestone} -> {role} ({code}); drafted by {provider}",
+                        f"{milestone} -> {role} ({code}); owner={owner}; SLA={sla_minutes}m; drafted by {provider}",
                         milestone_id=milestone, conn=conn)
         return {"id": cur.lastrowid, "created": True}
     finally:
@@ -195,9 +203,11 @@ def run_discharge_orchestration(patient_id: str, simulate_timeout_dept: str | No
             trace.append(f"{milestone}: {res['status']} -> BLOCKED_EXCEPTION ({r['message'] or r['error_type']}).")
             if not r["success"]:
                 continue
+            from src.core.rbac_guard import sanitize_clinical_note
             view = get_discharge_dag_state(pid, role)  # minimum-necessary view only
             blocker = {"milestone_id": milestone, "detail": res["detail"]}
-            notes = view["patient"]["clinical_handoff_notes"]
+            raw_notes = view["patient"]["clinical_handoff_notes"]
+            notes = sanitize_clinical_note(raw_notes)["sanitized_text"]
             if role == "PHARMACIST":
                 prompt = prompts.PHARMACIST_ALERT.format(blocker=res["detail"],
                                                          context=_fmt_context(view), notes=notes)

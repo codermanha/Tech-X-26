@@ -1,4 +1,4 @@
-"""Central settings, role definitions and the exact DAG topology."""
+"""Central settings, role definitions and the exact DAG topology (including Round 2 conditional nodes)."""
 import os
 from pathlib import Path
 
@@ -25,8 +25,8 @@ def get_subsystem_timeout() -> float:
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "offline")
 
-# Exact DAG: Clinical_Clearance -> [Pharmacy_Ready AND Insurance_Cleared]
-#            -> Patient_Departed -> Housekeeping_Dispatched
+# Base DAG: Clinical_Clearance -> [Pharmacy_Ready AND Insurance_Cleared]
+#           -> Patient_Departed -> Housekeeping_Dispatched
 DAG_DEPENDENCIES = {
     "Clinical_Clearance": [],
     "Pharmacy_Ready": ["Clinical_Clearance"],
@@ -36,17 +36,34 @@ DAG_DEPENDENCIES = {
 }
 MILESTONE_ORDER = list(DAG_DEPENDENCIES.keys())
 
+# U-3.2: Declarative conditional DAG nodes evaluated in Python from patient demographics/data.
+# Patients over 75 who live alone require Social_Work_Clearance before Patient_Departed.
+CONDITIONAL_DAG_NODES = {
+    "Social_Work_Clearance": {
+        "depends_on": ["Clinical_Clearance"],
+        "blocks": ["Patient_Departed"],
+        "condition": {
+            "min_age_exclusive": 75,
+            "requires_lives_alone": True,
+        },
+        "description": "Mandatory social work home-safety clearance for patients > 75 living alone.",
+    }
+}
+
 # Which human roles may modify which milestone.
 MILESTONE_ROLE_PERMISSIONS = {
     "Clinical_Clearance": {"PHYSICIAN"},
-    "Pharmacy_Ready": {"PHARMACIST"},
-    "Insurance_Cleared": {"INSURANCE_SPECIALIST"},
+    "Pharmacy_Ready": {"PHARMACIST", "PHARMACY_SUPERVISOR"},
+    "Insurance_Cleared": {"INSURANCE_SPECIALIST", "BILLING_SUPERVISOR"},
+    "Social_Work_Clearance": {"SOCIAL_WORKER", "NURSE", "PHYSICIAN"},
     "Patient_Departed": {"NURSE", "TRANSPORT", "PHYSICIAN"},
     "Housekeeping_Dispatched": {"HOUSEKEEPING", "NURSE"},
 }
 
-# Milestones the AI agent may touch at all. It never touches clinical orders
-# or the physical patient departure, and never clears BLOCKED_EXCEPTION.
+# Milestones the AI agent may touch at all. It never touches clinical orders,
+# social work clearance, or physical patient departure, and never clears BLOCKED_EXCEPTION.
 AI_ALLOWED_MILESTONES = {"Pharmacy_Ready", "Insurance_Cleared", "Housekeeping_Dispatched"}
 
 PHI_STRIPPED_ROLES = {"HOUSEKEEPING", "TRANSPORT"}
+
+DEFAULT_ESCALATION_SLA_MINUTES = 30
