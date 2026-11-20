@@ -540,10 +540,6 @@ export function App() {
       ? 'Insurance_Cleared'
       : null;
 
-  const openSpecialistTickets = specialistMilestone
-    ? escalations.filter((t) => t.milestone_id === specialistMilestone && t.status === 'OPEN')
-    : [];
-
   const profile = TEAM_PROFILES[role] || TEAM_PROFILES.PHYSICIAN;
   const activePatientItem = patients.find((p) => p.patient_id === patientId);
   const patientDisplayName = restricted
