@@ -69,3 +69,23 @@ def test_chat_sanitizes_prompt_injection_and_blocks_restricted_roles():
         assert r_res.status_code == 200
         assert r_res.json()["restricted"] is True
         assert r_res.json()["messages"] == []
+
+
+def test_doctor_emergency_chat_to_nurse_and_pager_ack():
+    r_emg = client.post(
+        "/api/patients/402/chat/send?role=PHYSICIAN",
+        json={
+            "sender_type": "PHYSICIAN",
+            "recipient": "NURSE",
+            "message": "STAT Nurse: check vitals and hold discharge transport now!",
+            "urgent": True,
+            "ask_ai_triage": True,
+        },
+    )
+    assert r_emg.status_code == 200
+    body = r_emg.json()
+    assert body["priority"] == "URGENT"
+    assert body["sent_message"]["sender_type"] == "PHYSICIAN"
+    assert body["sent_message"]["recipient"] == "NURSE"
+    assert body["ai_reply"] is not None
+    assert "Nurse" in body["ai_reply"]["message"] or "STAT" in body["ai_reply"]["message"]

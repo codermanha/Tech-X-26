@@ -214,6 +214,7 @@ export interface ChatMessageItem {
   patient_id: string;
   sender_type: string;
   sender_name: string;
+  recipient?: string;
   message: string;
   priority: 'NORMAL' | 'URGENT';
   was_sanitized: boolean;
@@ -414,6 +415,7 @@ export const api = {
     patientId: string,
     payload: {
       sender_type: string;
+      recipient?: string;
       message: string;
       urgent?: boolean;
       ask_ai_triage?: boolean;
@@ -435,6 +437,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({
           sender_type: payload.sender_type,
+          recipient: payload.recipient || 'CARE_TEAM',
           message: payload.message,
           urgent: Boolean(payload.urgent),
           ask_ai_triage: payload.ask_ai_triage ?? true,

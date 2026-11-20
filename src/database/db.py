@@ -71,6 +71,7 @@ CREATE TABLE chat_messages (
     patient_id TEXT NOT NULL,
     sender_type TEXT NOT NULL,
     sender_name TEXT NOT NULL,
+    recipient TEXT NOT NULL DEFAULT 'CARE_TEAM',
     message TEXT NOT NULL,
     priority TEXT NOT NULL DEFAULT 'NORMAL',
     was_sanitized INTEGER NOT NULL DEFAULT 0,

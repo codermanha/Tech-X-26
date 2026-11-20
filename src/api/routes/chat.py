@@ -14,7 +14,8 @@ router = APIRouter(prefix="/api/patients", tags=["Urgent Care Chat (Patient <-> 
 
 _URGENT_REGEX = re.compile(
     r"\b(fever|chest\s+pain|short(?:ness)?\s+of\s+breath|trouble\s+breathing|bleeding|"
-    r"dizzy|faint(?:ing)?|emergency|urgent|stat|severe\s+pain|chills|allergic|swelling)\b",
+    r"dizzy|faint(?:ing)?|emergency|urgent|stat|severe\s+pain|chills|allergic|swelling|"
+    r"code|rapid\s+response|vitals|bp\s+drop|desat|hypox|oxygen|sepsis|fall|help\s+now)\b",
     re.I,
 )
 
@@ -26,12 +27,18 @@ def _ensure_chat_table(conn) -> None:
             patient_id TEXT NOT NULL,
             sender_type TEXT NOT NULL,
             sender_name TEXT NOT NULL,
+            recipient TEXT NOT NULL DEFAULT 'CARE_TEAM',
             message TEXT NOT NULL,
             priority TEXT NOT NULL DEFAULT 'NORMAL',
             was_sanitized INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )"""
     )
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
+    if "recipient" not in cols:
+        conn.execute(
+            "ALTER TABLE chat_messages ADD COLUMN recipient TEXT NOT NULL DEFAULT 'CARE_TEAM'"
+        )
 
 
 class SendChatMessageRequest(BaseModel):
@@ -40,17 +47,22 @@ class SendChatMessageRequest(BaseModel):
         description="PATIENT | PHYSICIAN | NURSE | PHARMACIST | INSURANCE_SPECIALIST",
     )
     sender_name: Optional[str] = Field(default=None, description="Display name of sender")
+    recipient: str = Field(
+        default="CARE_TEAM",
+        description="NURSE | PHYSICIAN | PHARMACIST | PATIENT | CARE_TEAM",
+    )
     message: str = Field(..., min_length=1, max_length=2000)
     urgent: bool = Field(default=False, description="Force URGENT / STAT priority flag")
     ask_ai_triage: bool = Field(
         default=True,
-        description="Generate an immediate grounded AI Care Assistant response alongside notifying the doctor",
+        description="Generate an immediate grounded AI Care Assistant / Pager response alongside notifying the team",
     )
 
 
 def _build_offline_chat_reply(
     pid: str,
     sender_type: str,
+    recipient: str,
     clean_msg: str,
     is_urgent: bool,
     state: dict,
@@ -70,6 +82,21 @@ def _build_offline_chat_reply(
             f"We flagged your message ('{clean_msg[:90]}') as STAT priority. Please stay in Bed {bed} "
             f"and press your bedside call bell if symptoms worsen — a clinician is reviewing right now. "
             f"(Note: Chat never overrides clinical discharge orders automatically.)"
+        )
+
+    if sender_type in ("PHYSICIAN", "NURSE", "PHARMACIST"):
+        target_label = {
+            "NURSE": "Nurse Elena Brooks, RN",
+            "PHYSICIAN": "Dr. Sarah Chen, MD",
+            "PHARMACIST": "Nathan Vance, PharmD",
+            "PATIENT": p.get("patient_name", "Patient"),
+            "CARE_TEAM": "Full Bedside Care Team",
+        }.get(recipient, recipient)
+        prefix = "🚨 STAT EMERGENCY PAGE DELIVERED" if is_urgent else "✅ Care-Team Message Delivered"
+        return (
+            f"{prefix} to {target_label} for Bed {bed} (Patient #{pid}). "
+            f"Message logged: '{clean_msg[:90]}'. "
+            f"Current pending steps: {', '.join(pending_or_blocked) or 'All milestones COMPLETED'}."
         )
 
     if sender_type == "PATIENT":
@@ -123,6 +150,7 @@ def get_patient_chat(
             "patient_id": r["patient_id"],
             "sender_type": r["sender_type"],
             "sender_name": r["sender_name"],
+            "recipient": r["recipient"] if "recipient" in r.keys() else "CARE_TEAM",
             "message": r["message"],
             "priority": r["priority"],
             "was_sanitized": bool(r["was_sanitized"]),
@@ -160,6 +188,7 @@ def send_patient_chat_message(
         raise HTTPException(status_code=404, detail=state["error"])
 
     sender_type = payload.sender_type.upper()
+    recipient = (payload.recipient or "CARE_TEAM").upper()
     default_names = {
         "PATIENT": f"{state['patient'].get('patient_name', 'Patient')} (Patient)",
         "PHYSICIAN": "Sarah Chen, MD (Physician)",
@@ -183,9 +212,9 @@ def send_patient_chat_message(
         _ensure_chat_table(conn)
         cur = conn.execute(
             """INSERT INTO chat_messages
-               (patient_id, sender_type, sender_name, message, priority, was_sanitized, created_at)
-               VALUES (?,?,?,?,?,?,?)""",
-            (pid, sender_type, sender_name, clean_text, priority, 1 if san["was_sanitized"] else 0, now),
+               (patient_id, sender_type, sender_name, recipient, message, priority, was_sanitized, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (pid, sender_type, sender_name, recipient, clean_text, priority, 1 if san["was_sanitized"] else 0, now),
         )
         msg_id = cur.lastrowid
 
@@ -194,28 +223,44 @@ def send_patient_chat_message(
             sender_type,
             "send_urgent_chat_message" if is_urgent else "send_chat_message",
             "APPLIED",
-            f"[{priority}] {sender_name}: {clean_text[:120]}"
+            f"[{priority} -> {recipient}] {sender_name}: {clean_text[:110]}"
             + (f" (sanitized {len(san['flagged_commands'])} cmd)" if san["was_sanitized"] else ""),
             conn=conn,
         )
 
         ai_reply_record = None
-        if payload.ask_ai_triage and sender_type == "PATIENT":
-            prompt = (
-                "You are ClearTurn's hospital care-coordination triage chatbot. Answer the patient's "
-                "message calmly and concisely in 2-3 sentences using ONLY the facts below. "
-                "Never alter clinical orders or promise discharge times if blockers exist. "
-                "If the patient reports fever, chest pain, bleeding, or breathing trouble, tell them "
-                "their attending doctor has been alerted STAT and to stay in bed.\n\n"
-                f"Patient Bed: {state['patient'].get('bed_id')} ({state['patient'].get('unit')})\n"
-                f"Milestone Statuses: { {k: v['status'] for k, v in state['milestones'].items()} }\n"
-                f"Active Blockers: {state['active_blockers']}\n"
-                f"Sanitized Patient Message: {clean_text}"
-            )
+        should_reply = payload.ask_ai_triage and (
+            sender_type == "PATIENT"
+            or (sender_type in ("PHYSICIAN", "NURSE", "PHARMACIST") and (is_urgent or recipient != "CARE_TEAM"))
+        )
+        if should_reply:
+            if sender_type == "PATIENT":
+                prompt = (
+                    "You are ClearTurn's hospital care-coordination triage chatbot. Answer the patient's "
+                    "message calmly and concisely in 2-3 sentences using ONLY the facts below. "
+                    "Never alter clinical orders or promise discharge times if blockers exist. "
+                    "If the patient reports fever, chest pain, bleeding, or breathing trouble, tell them "
+                    "their attending doctor has been alerted STAT and to stay in bed.\n\n"
+                    f"Patient Bed: {state['patient'].get('bed_id')} ({state['patient'].get('unit')})\n"
+                    f"Milestone Statuses: { {k: v['status'] for k, v in state['milestones'].items()} }\n"
+                    f"Active Blockers: {state['active_blockers']}\n"
+                    f"Sanitized Patient Message: {clean_text}"
+                )
+            else:
+                prompt = (
+                    "You are ClearTurn's Hospital Emergency Pager & Clinical Handoff Assistant. "
+                    f"Confirm delivery of this {priority} message from {sender_type} to {recipient} "
+                    "in 2 crisp sentences using ONLY the verified bed/milestone facts below.\n\n"
+                    f"Patient Bed: {state['patient'].get('bed_id')} ({state['patient'].get('unit')})\n"
+                    f"Milestones: { {k: v['status'] for k, v in state['milestones'].items()} }\n"
+                    f"Message: {clean_text}"
+                )
             ai_text, provider = llm_complete(prompt)
             if ai_text is None:
-                provider = "offline-triage-bot"
-                ai_text = _build_offline_chat_reply(pid, sender_type, clean_text, is_urgent, state)
+                provider = "emergency-pager" if sender_type != "PATIENT" else "offline-triage-bot"
+                ai_text = _build_offline_chat_reply(
+                    pid, sender_type, recipient, clean_text, is_urgent, state
+                )
 
             # Enforce RBAC output guard on AI response
             guard = enforce_rbac_output_guard(ai_text, state["patient"], "NURSE")
@@ -223,12 +268,15 @@ def send_patient_chat_message(
             ai_now = utc_now()
             ai_cur = conn.execute(
                 """INSERT INTO chat_messages
-                   (patient_id, sender_type, sender_name, message, priority, was_sanitized, created_at)
-                   VALUES (?,?,?,?,?,?,?)""",
+                   (patient_id, sender_type, sender_name, recipient, message, priority, was_sanitized, created_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
                 (
                     pid,
                     "AI_ASSISTANT",
-                    f"ClearTurn Care Bot ({provider})",
+                    f"ClearTurn Emergency Pager ({provider})"
+                    if sender_type != "PATIENT"
+                    else f"ClearTurn Care Bot ({provider})",
+                    sender_type,
                     safe_ai_text,
                     priority,
                     0,
@@ -239,7 +287,12 @@ def send_patient_chat_message(
                 "id": ai_cur.lastrowid,
                 "patient_id": pid,
                 "sender_type": "AI_ASSISTANT",
-                "sender_name": f"ClearTurn Care Bot ({provider})",
+                "sender_name": (
+                    f"ClearTurn Emergency Pager ({provider})"
+                    if sender_type != "PATIENT"
+                    else f"ClearTurn Care Bot ({provider})"
+                ),
+                "recipient": sender_type,
                 "message": safe_ai_text,
                 "priority": priority,
                 "was_sanitized": False,
@@ -258,6 +311,7 @@ def send_patient_chat_message(
             "patient_id": pid,
             "sender_type": sender_type,
             "sender_name": sender_name,
+            "recipient": recipient,
             "message": clean_text,
             "priority": priority,
             "was_sanitized": san["was_sanitized"],
