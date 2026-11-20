@@ -120,11 +120,18 @@ def get_db_connection() -> sqlite3.Connection:
     path = config.get_db_path()
     try:
         return _open_sqlite_connection(path)
-    except (OSError, sqlite3.OperationalError):
+    except (OSError, sqlite3.OperationalError) as primary_exc:
         fallback = Path(tempfile.gettempdir()) / path.name
-        if fallback == path:
-            raise
-        return _open_sqlite_connection(fallback)
+        if fallback != path:
+            try:
+                return _open_sqlite_connection(fallback)
+            except (OSError, sqlite3.OperationalError) as fallback_exc:
+                raise sqlite3.OperationalError(
+                    f"unable to open database at {path} ({primary_exc}) or {fallback} ({fallback_exc})"
+                ) from fallback_exc
+        raise sqlite3.OperationalError(
+            f"unable to open database at {path} ({primary_exc})"
+        ) from primary_exc
 
 
 @contextmanager
